@@ -6,7 +6,9 @@
   "scripts": {
     "prestart": "node scripts/generate-icon.js",
     "start": "electron .",
-    "dev": "node scripts/generate-icon.js && electron . --dev"
+    "dev": "node scripts/generate-icon.js && electron . --dev",
+    "build": "electron-builder --win",
+    "build:portable": "electron-builder --win portable"
   },
   "keywords": [
     "desktop-pet",
@@ -18,9 +20,23 @@
   "author": "IgorDev",
   "license": "MIT",
   "devDependencies": {
-    "electron": "^41.2.0"
+    "electron": "^41.2.0",
+    "electron-builder": "^26.8.1"
   },
   "dependencies": {
     "three": "^0.160.0"
+  },
+  "build": {
+    "appId": "dev.igor.petskod",
+    "productName": "PETSKOD",
+    "directories": {
+      "output": "dist"
+    },
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ]
+    }
   }
 }

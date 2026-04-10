@@ -39,12 +39,14 @@ O projeto atualmente contempla as evoluções da Fase 1 (MVP) e Fase 2 (Brain & 
 - **Movimentação Livre**: Arraste-o para qualquer lugar da tela perfeitamente (Custom Native Dragging).
 - **Leveza Absoluta**: Renderização a cravados 30 FPS (configurable tick) em modo `low-power`.
 
-### 🧠 Sistema de Comportamento Autônomo e TTS
-- **Máquina de Estados de Vida**: O personagem transita nativamente entre ciclos de `Idle`, `Happy`, `Bored` e `Sleeping` dependendo de quão interativo você foi.
-- **Reações Visuais & Partículas**: Interagir ativará cores baseadas no estado ou "bursts" de partículas suaves na tela.
-- **Balões de Fala (Speech Bubbles)**: Animações Spring UI trazem o que o pet diz ao mundo visual.
-- **Text-to-Speech Nativo (TTS)**: O pet **fala com você**. Integração invisível com o `Windows SAPI` via processo PowerShell, garantindo que o programa fale nativamente qualquer frase da interface sem nenhuma dependência cloud.
-- **Tray Icon Poderoso**: Menu de sistema disponível na bandeja perto do relógio para forçar estados e ocultá-lo rapidamente.
+### 🧠 Cérebro, Memória e Comportamento Autônomo
+- **Máquina de Estados**: O personagem transita nativamente entre ciclos de `Idle`, `Happy`, `Bored`, `Sleeping` e `Reacting`.
+- **Motor de Personalidade (Memória e Leveling)**: Você ganha XP interagindo (clicando) diariamente com ele. Se não aparecer a tempo, a afinidade "decai".
+- **Amigo Virtual Perfeito**: Alcance o tier de afinidade "Best Friend" para reações exclusivas com explosão de corações virtuais ❤️.
+- **Consciência de Calendário (System-Aware)**: O pet sabe quando é Halloween, Natal, a hora atual do dia (madrugada/manhã) e cumprimenta você de acordo com a vida real. 
+- **Persistência de Dados**: Ele salva todo o progresso (XP, last time seen) localmente em um data store no disco usando _Electron-Store_.
+- **Balões de Fala e TTS Nativo**: Além de UI animada, o pet integra chamadas de `Windows SAPI` invisíveis via PowerShell e te escuta nativamente (Text-to-Speech) sem lag e offline.
+- **Tray Icon Poderoso**: Menu de sistema disponível na bandeja para forçar estados e encerrá-lo rapidamente.
 
 ---
 
@@ -169,14 +171,14 @@ Se quiser adicionar uma nova funcionalidade (Ex: Trocar de roupa do modelo), adi
 
 ## 🔮 Roadmap (Próximas Fases)
 
-- [x] **Fase 1**: Janela transparente borderless, Drag Nativo 2D, Load de Elementos 3D FPS cravados. (Concluído MVP)
-- [x] **Fase 2**: Brain Engine. TTS Embebido Localmente, Tray Menu, State Machine, Pulo e Partículas Interativas. (Concluído Evolução)
-- [ ] **Fase 3**: Menu visual de HUD em React/Vue para configurações ao Vivo (Velocidade do Mouse Voice SAPI, Troca de Avatares Dinâmica de Modelos na pasta `assets` sem requerer reboots).
-- [ ] **Fase 4**: Integração com APIs externas em `behavior.js` (OpenAI / Anthropic REST) para permitir a ele criar respostas dinâmicas no estado Contextual-Consciente. OpenAI Real-Life. 
-
+- [x] **Fases 1, 2 e 3**: Core Setup, Three.js Rendering Borderless, State Machine básica, Dragging Nativo 2D e TTS Embebido.
+- [x] **Fase 4**: Polimento Visual, Shader de Outline Glow e Raycasting Input aprimorado.
+- [x] **Fase 5 (The Brain Update)**: Motor de Personalidade Completo. Memória de longo prazo, XP Levels, Interações Diárias limitadas, Decaimento, Reações Contextuais (Tempo, Feriados) e Feedback Visual (Corações).
+- [ ] **Fase 6**: Integração com APIs externas de LLM/Agents (OpenAI / Anthropic / Local Meta Llama via Ollama) para reescrever as falas proceduralmente e manter conversas profundas. 
+- [ ] **Fase 7**: Dashboard Local em HUD (React/Vue) para configurar perfis de TTS, voz, escolher modelos GLB visualmente sem lidar com arquivos crus no SO.
 ---
 
 <br>
 <div align="center">
-  <i>Criado com paixão e baixo consumo de CPU por IgorDev — 2026.</i>
+  <i>Criado com foco no baixo consumo de CPU por IgorDev — 2026.</i>
 </div>

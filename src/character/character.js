@@ -2,6 +2,8 @@
 // Gerencia o personagem 3D com suporte a estados visuais por comportamento
 
 import * as THREE from 'three';
+import { FaceController } from './face.js';
+import { OutlineEffect } from '../effects/outline.js';
 
 export const CharacterState = {
   IDLE: 'idle',
@@ -29,6 +31,8 @@ export class Character {
     this.animations = {};
     this.currentAction = null;
     this.state = CharacterState.IDLE;
+    this.face = null;
+    this.outline = null;
 
     this._placeholder = null;
     this._placeholderMat = null;
@@ -59,7 +63,18 @@ export class Character {
 
     this.model.scale.setScalar(scale);
     this.model.position.sub(center.multiplyScalar(scale));
+
+    this.model.traverse((child) => {
+      if (child.isMesh) {
+        child.castShadow = true;
+        child.receiveShadow = true;
+      }
+    });
+
     this.scene.add(this.model);
+
+    this.face = new FaceController(this.model);
+    this.outline = new OutlineEffect(this.model);
 
     this.mixer = new THREE.AnimationMixer(this.model);
     for (const clip of clips) {
@@ -82,42 +97,42 @@ export class Character {
     });
 
     this._placeholder = new THREE.Mesh(geo, this._placeholderMat);
+    this._placeholder.castShadow = true;
+    this._placeholder.receiveShadow = true;
     this._placeholder.position.set(0, 0.4, 0);
     this.scene.add(this._placeholder);
 
     // Cabeça redonda
     const headGeo = new THREE.SphereGeometry(0.32, 12, 12);
     const head = new THREE.Mesh(headGeo, this._placeholderMat);
+    head.castShadow = true;
+    head.receiveShadow = true;
     head.position.set(0, 0.5, 0);
     this._placeholder.add(head);
 
-    // Olhos
-    this._addEyes(head);
+    // Olhos para o placeholder
+    const eyeGeo = new THREE.SphereGeometry(0.06, 8, 8);
+    const eyeMat = new THREE.MeshStandardMaterial({ color: 0x000000 });
+    
+    const leftEye = new THREE.Mesh(eyeGeo, eyeMat);
+    leftEye.name = 'LeftEye';
+    leftEye.position.set(-0.12, 0.05, 0.28);
+    head.add(leftEye);
+
+    const rightEye = new THREE.Mesh(eyeGeo, eyeMat);
+    rightEye.name = 'RightEye';
+    rightEye.position.set(0.12, 0.05, 0.28);
+    head.add(rightEye);
+
+    this.face = new FaceController(this._placeholder);
+    this.outline = new OutlineEffect(this._placeholder);
+
     // Bochechas
     this._addCheeks(head);
     // Orelhinhas
     this._addEars(head);
     // Partículas idle
     this._initParticles();
-  }
-
-  _addEyes(parent) {
-    const eyeGeo = new THREE.SphereGeometry(0.065, 8, 8);
-    const eyeMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
-    const pupilGeo = new THREE.SphereGeometry(0.035, 8, 8);
-    const pupilMat = new THREE.MeshBasicMaterial({ color: 0x111111 });
-
-    const eyes = [[-0.13, 0.1, 0.3], [0.13, 0.1, 0.3]];
-    for (const [x, y, z] of eyes) {
-      const eye = new THREE.Mesh(eyeGeo, eyeMat);
-      eye.position.set(x, y, z);
-      parent.add(eye);
-
-      const pupil = new THREE.Mesh(pupilGeo, pupilMat);
-      pupil.position.set(0.01, 0, 0.05);
-      eye.add(pupil);
-    }
-    this._eyes = parent.children.filter(c => c instanceof THREE.Mesh && c.geometry.type === 'SphereGeometry' && c.material.color?.getHex() === 0xffffff);
   }
 
   _addCheeks(parent) {
@@ -270,8 +285,18 @@ export class Character {
 
   // ── Update por frame ──────────────────────────────────────────────────────
 
+  onHoverEnter() {
+    if (this.outline) this.outline.show();
+  }
+
+  onHoverExit() {
+    if (this.outline) this.outline.hide();
+  }
+
   update(delta) {
     if (this.mixer) this.mixer.update(delta);
+    if (this.face) this.face.update(delta);
+    if (this.outline) this.outline.update(delta);
 
     if (this._placeholder) {
       this._updatePlaceholderAnimation(delta);

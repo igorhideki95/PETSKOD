@@ -7,6 +7,22 @@ import { Character } from '../character/character.js';
 import { InputManager } from '../input/input.js';
 import { BehaviorSystem } from '../behavior/behavior.js';
 import { TTSEngine } from '../speech/tts.js';
+import { AmbientManager } from '../effects/ambient.js';
+import { HeartEmitter } from '../effects/hearts.js';
+
+// ── Error Boundaries ──────────────────────────────────────────────────────────
+window.onerror = function (message, source, lineno, colno, error) { console.log('__STACK_TRACE__' + (error && error.stack));
+  console.error('[PETSKOD Error]', message, error);
+  const statusEl = document.getElementById('status-label');
+  if (statusEl) {
+    statusEl.textContent = 'Erro interno ⚠️';
+    statusEl.classList.add('visible');
+    setTimeout(() => statusEl.classList.remove('visible'), 3000);
+  }
+};
+window.onunhandledrejection = function (event) { console.log('__REJECTION_STACK__' + (event.reason && event.reason.stack));
+  console.error('[PETSKOD Unhandled Rejection]', event.reason);
+};
 
 // ── Configuração ──────────────────────────────────────────────────────────────
 const MODEL_PATH = './assets/models/character.glb';
@@ -35,10 +51,23 @@ async function init() {
   const speechBubble = document.getElementById('speech-bubble');
   const speechText = document.getElementById('speech-text');
 
+  let speechBubbleTimeout = null;
+  function showSpeechBubble(text) {
+    if (!speechBubble || !speechText) return;
+    speechText.textContent = text;
+    speechBubble.classList.add('visible');
+    clearTimeout(speechBubbleTimeout);
+    const duration = Math.max(2000, text.length * 80);
+    speechBubbleTimeout = setTimeout(() => speechBubble.classList.remove('visible'), duration);
+  }
+
   const statusLabel = new StatusLabel(statusEl);
 
   // 1. Cena Three.js
   const sceneManager = new SceneManager(container);
+
+  // 1.5 Tema dia/noite
+  const ambientManager = new AmbientManager(sceneManager.scene, sceneManager.lights);
 
   // 2. Personagem
   const character = new Character(sceneManager.scene);
@@ -46,8 +75,16 @@ async function init() {
   // 3. TTS
   const tts = new TTSEngine();
 
-  // 4. Sistema de comportamento
+  // 4. Estado inicial da persistência
+  const initialState = window.petskodAPI?.getLastState ? await window.petskodAPI.getLastState() : 'idle';
+  const appData = window.petskodAPI?.getAppData ? await window.petskodAPI.getAppData() : null;
+
+  const heartEmitter = new HeartEmitter(sceneManager.scene);
+
+  // 5. Sistema de comportamento
   const behavior = new BehaviorSystem({
+    initialState,
+    appData,
     onStateChange: (state) => {
       character.applyBehaviorState(state);
       if (window.petskodAPI) window.petskodAPI.notifyStateChange(state);
@@ -59,6 +96,16 @@ async function init() {
     onStatus: (text, duration) => {
       statusLabel.show(text, duration);
     },
+    onSpecialReaction: (type) => {
+      if (type === 'heart') {
+        heartEmitter.emit(character.model ? character.model.position : character._placeholder.position, 4);
+      }
+    },
+    onDataChange: (data) => {
+      if (window.petskodAPI?.saveAppData) {
+        window.petskodAPI.saveAppData(data);
+      }
+    }
   });
 
   // 5. Tenta carregar modelo GLB
@@ -72,11 +119,15 @@ async function init() {
     character.initPlaceholder();
   }
 
-  // 6. Input — passa o BehaviorSystem em vez do StateManager antigo
-  new InputManager(sceneManager.renderer, sceneManager.camera, character, behavior);
+  // 6. Input — passa a cena também para a trilha
+  const inputManager = new InputManager(sceneManager.renderer, sceneManager.camera, character, behavior, sceneManager.scene);
 
   // 7. Loop de render
-  sceneManager.onRender((delta) => character.update(delta));
+  sceneManager.onRender((delta) => {
+    character.update(delta);
+    inputManager.update(delta);
+    heartEmitter.update(delta);
+  });
   sceneManager.startLoop();
 
   // 8. Botão fechar
@@ -97,16 +148,7 @@ async function init() {
 
   // ── Balão de fala ─────────────────────────────────────────────────────────
 
-  let speechBubbleTimeout = null;
 
-  function showSpeechBubble(text) {
-    if (!speechBubble || !speechText) return;
-    speechText.textContent = text;
-    speechBubble.classList.add('visible');
-    clearTimeout(speechBubbleTimeout);
-    const duration = Math.max(2000, text.length * 80);
-    speechBubbleTimeout = setTimeout(() => speechBubble.classList.remove('visible'), duration);
-  }
 
   console.log('[PETSKOD] Phase 2 iniciada! 🎉');
 }

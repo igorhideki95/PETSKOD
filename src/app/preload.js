@@ -13,6 +13,13 @@ contextBridge.exposeInMainWorld('petskodAPI', {
   // Notifica o main sobre mudança de estado (atualiza tray)
   notifyStateChange: (state) => ipcRenderer.send('state-change', state),
 
+  // Obter estado inicial
+  getLastState: () => ipcRenderer.invoke('get-last-state'),
+
+  // Sistema de evolução/memória
+  getAppData: () => ipcRenderer.invoke('get-app-data'),
+  saveAppData: (data) => ipcRenderer.send('save-app-data', data),
+
   // Escuta comandos do main → renderer
   onSpeechTest: (callback) => ipcRenderer.on('trigger-speech-test', callback),
   onForceState: (callback) => ipcRenderer.on('force-state', (event, state) => callback(state)),

@@ -2,20 +2,32 @@ const { app, BrowserWindow, ipcMain, screen, Tray, Menu, nativeImage } = require
 const { exec } = require('child_process');
 const path = require('path');
 
+// ── Error Boundaries ──────────────────────────────────────────────────────────
+process.on('uncaughtException', (error) => {
+  console.error('[PETSKOD Fatal Erro]', error);
+});
+process.on('unhandledRejection', (reason) => {
+  console.error('[PETSKOD Unhandled Rejection]', reason);
+});
+
 let mainWindow;
 let tray;
 let isVisible = true;
+let store;
 
 // ── Janela principal ──────────────────────────────────────────────────────────
 
 function createWindow() {
   const { width, height } = screen.getPrimaryDisplay().workAreaSize;
 
+  const defaultBounds = { width: 250, height: 350, x: width - 280, y: height - 380 };
+  const bounds = store.get('windowBounds') || defaultBounds;
+
   mainWindow = new BrowserWindow({
-    width: 250,
-    height: 350,
-    x: width - 280,
-    y: height - 380,
+    width: bounds.width,
+    height: bounds.height,
+    x: bounds.x >= 0 ? bounds.x : defaultBounds.x,
+    y: bounds.y >= 0 ? bounds.y : defaultBounds.y,
     transparent: true,
     frame: false,
     alwaysOnTop: true,
@@ -38,7 +50,22 @@ function createWindow() {
     mainWindow.webContents.openDevTools({ mode: 'detach' });
   }
 
+  mainWindow.webContents.on('console-message', (event, level, message, line, sourceId) => {
+    console.log(`[Renderer Line ${line}]: ${message}`);
+  });
+
+  // Save bounds when window is moved
+  mainWindow.on('moved', saveBounds);
+
   mainWindow.on('closed', () => { mainWindow = null; });
+}
+
+function saveBounds() {
+  if (mainWindow && store) {
+    const [x, y] = mainWindow.getPosition();
+    const [width, height] = mainWindow.getSize();
+    store.set('windowBounds', { x, y, width, height });
+  }
 }
 
 // ── Tray (bandeja do sistema) ─────────────────────────────────────────────────
@@ -120,6 +147,20 @@ ipcMain.on('window-move', (event, { deltaX, deltaY }) => {
 // Fechar app
 ipcMain.on('app-quit', () => app.quit());
 
+// Obter estado inicial persistido
+ipcMain.handle('get-last-state', () => {
+  return store ? store.get('lastState') : 'idle';
+});
+
+// App data para progression e stats
+ipcMain.handle('get-app-data', () => {
+  return store ? store.get('appData') : null;
+});
+
+ipcMain.on('save-app-data', (event, data) => {
+  if (store) store.set('appData', data);
+});
+
 // TTS via PowerShell (Windows SAPI) — usa arquivo .ps1 temporário para evitar escape de aspas
 ipcMain.on('tts-speak', (event, rawText) => {
   const text = String(rawText)
@@ -160,6 +201,7 @@ ipcMain.on('tts-speak', (event, rawText) => {
 
 // Notificação de mudança de estado (para atualizar o tray tooltip)
 ipcMain.on('state-change', (event, state) => {
+  if (store) store.set('lastState', state);
   if (!tray) return;
   const stateEmojis = {
     idle: '😊',
@@ -178,6 +220,13 @@ app.whenReady().then(() => {
   try {
     require('../../scripts/generate-icon.js');
   } catch { /* silencioso */ }
+
+  // Inicializa Persistência
+  const Store = require('../storage/persistence.js');
+  store = new Store({
+    configName: 'petskod-preferences',
+    defaults: { windowBounds: null, lastState: 'idle' }
+  });
 
   createWindow();
   createTray();

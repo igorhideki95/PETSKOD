@@ -2,6 +2,9 @@
 // Máquina de estados do personagem: IDLE → BORED → SLEEPING, interação → HAPPY
 
 import { randomPhrase } from './phrases.js';
+import { MemorySystem } from './memory.js';
+import { LevelingSystem } from './leveling.js';
+import { getContextualGreeting } from './system-awareness.js';
 
 export const BehaviorState = {
   IDLE: 'idle',
@@ -21,14 +24,20 @@ const SPEECH_INTERVAL_MAX = 40_000; // fala no máximo a cada 40s
 export class BehaviorSystem {
   /**
    * @param {Object} callbacks
+   * @param {string} callbacks.initialState
    * @param {function(string)} callbacks.onStateChange
    * @param {function(string)} callbacks.onSpeak
    * @param {function(string)} callbacks.onStatus
+   * @param {Object} callbacks.appData
+   * @param {function(Object)} callbacks.onDataChange
    */
   constructor(callbacks) {
     this._cb = callbacks;
-    this._state = BehaviorState.IDLE;
+    this._state = callbacks.initialState || BehaviorState.IDLE;
     this._lastInteraction = Date.now();
+
+    this.memory = new MemorySystem(callbacks.appData?.memory);
+    this.leveling = new LevelingSystem(callbacks.appData?.leveling);
 
     this._boredTimer = null;
     this._sleepTimer = null;
@@ -43,12 +52,24 @@ export class BehaviorSystem {
   _start() {
     this._scheduleBoredTransition();
     this._scheduleSpeech();
-
-    // Saudação inicial
+    
+    // Pequeno delay para atualizar a afinidade ao iniciar o dia
     setTimeout(() => {
-      this._speak('greeting');
-      this._showStatus('Olá! 🐾');
+      this._saveData();
+      
+      const greeting = getContextualGreeting(this.memory.getAffinityTier());
+      this._cb.onSpeak(greeting);
+      this._showStatus(`Lvl ${this.leveling.level} ✨`);
     }, 1200);
+  }
+
+  _saveData() {
+    if (this._cb.onDataChange) {
+      this._cb.onDataChange({
+        memory: this.memory.getData(),
+        leveling: this.leveling.getData()
+      });
+    }
   }
 
   // ── Transições de estado ────────────────────────────────────────────────────
@@ -91,12 +112,30 @@ export class BehaviorSystem {
 
     clearTimeout(this._happyTimer);
 
-    if (wasSleeping) {
-      this._speak('wakeUp');
-      this._showStatus('Acordei! 😮');
-    } else {
-      this._speak('reaction');
-      this._showStatus('Ei! 👋');
+    // Sistema de XP e Afinidade
+    this.memory.interact();
+    const leveledUp = this.leveling.addXP(15, (newLevel) => {
+      this._speak('levelUp');
+      this._showStatus(`⭐ Lvl UP! (${newLevel})`, 4000);
+    });
+
+    this._saveData();
+
+    if (!leveledUp) {
+      if (wasSleeping) {
+        this._speak('wakeUp');
+        this._showStatus('Acordei! 😮');
+      } else {
+        const tier = this.memory.getAffinityTier();
+        if (tier === 'best_friend') {
+          this._speak('reaction_bff');
+          this._showStatus('Você é o melhor! ❤️');
+          if (this._cb.onSpecialReaction) this._cb.onSpecialReaction('heart');
+        } else {
+          this._speak('reaction');
+          this._showStatus(`XP +15 ✨`);
+        }
+      }
     }
 
     this._setState(BehaviorState.HAPPY);

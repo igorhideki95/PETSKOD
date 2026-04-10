@@ -62,6 +62,27 @@ export const PHRASES = {
     'De volta!',
     'Bom dia! ☀️',
   ],
+
+  greeting_bff: [
+    'Meu humano favorito! ❤️',
+    'Que saudade eu estava!',
+    'Oi melhor amigo!',
+    'O melhor momento do dia! 🐾'
+  ],
+
+  reaction_bff: [
+    'Hehe, seu carinho é o melhor! ❤️',
+    'Amo você!',
+    'Yaaay! 🥰',
+    'Puro amor!'
+  ],
+
+  levelUp: [
+    'Uau, me sinto mais forte!',
+    'Subi de nível! ⭐',
+    'Estamos crescendo juntos!',
+    'Mais inteligente e fofo!'
+  ]
 };
 
 /** Retorna uma frase aleatória de uma categoria */
