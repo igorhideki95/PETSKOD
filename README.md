@@ -61,7 +61,7 @@ O projeto atualmente contempla as evoluções da Fase 1 (MVP) e Fase 2 (Brain & 
 
 1. **Clone ou navegue até a pasta do projeto:**
    ```bash
-   cd C:\IgorDev\PETSKOD
+   cd C:\User\PETSKOD
    ```
 
 2. **Instale as dependências (Three.js & Electron):**

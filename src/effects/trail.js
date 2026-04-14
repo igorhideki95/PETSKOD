@@ -40,13 +40,13 @@ export class DragTrail {
   }
 
   spawn(mouseVec2) {
-    // Projeta o mouse no plano do personagem (Z = 0)
     this._raycaster.setFromCamera(mouseVec2, this.camera);
     const planeZ = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0);
     const intersectPoint = new THREE.Vector3();
-    this._raycaster.ray.intersectPlane(planeZ, intersectPoint);
+    const didIntersect = this._raycaster.ray.intersectPlane(planeZ, intersectPoint);
+    
+    if (!didIntersect) return;
 
-    // Encontra 2 partículas inativas e as inicializa
     let spawned = 0;
     for (const p of this.particles) {
       if (!p.active) {
@@ -54,9 +54,9 @@ export class DragTrail {
         p.age = 0;
         p.x = intersectPoint.x + (Math.random() - 0.5) * 0.15;
         p.y = intersectPoint.y + (Math.random() - 0.5) * 0.15;
-        p.z = Math.random() * 0.2; // Leve variaćão em Z para ficar "solto"
+        p.z = Math.random() * 0.2;
         p.vx = (Math.random() - 0.5) * 0.4;
-        p.vy = (Math.random() - 0.5) * 0.4 - 0.2; // gravidade suave
+        p.vy = (Math.random() - 0.5) * 0.4 - 0.2;
         p.vz = (Math.random() - 0.5) * 0.2;
         spawned++;
         if (spawned >= 2) break;
@@ -91,5 +91,11 @@ export class DragTrail {
     if (anyActive) {
       this.points.geometry.attributes.position.needsUpdate = true;
     }
+  }
+
+  dispose() {
+    this.scene.remove(this.points);
+    this.points.geometry.dispose();
+    this.points.material.dispose();
   }
 }

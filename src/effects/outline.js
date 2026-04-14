@@ -41,6 +41,8 @@ export class OutlineEffect {
       }
       
       outlineMesh.scale.set(1.08, 1.08, 1.08); 
+      outlineMesh.name = 'OutlineMarker';
+      outlineMesh.userData.isOutline = true;
       child.add(outlineMesh);
       outlineMesh.visible = false;
       this.outlines.push(outlineMesh);
@@ -63,5 +65,16 @@ export class OutlineEffect {
     if (!this.isActive) return;
     const t = Date.now() * 0.005;
     this.outlineMaterial.opacity = 0.3 + Math.sin(t) * 0.2;
+  }
+
+  dispose() {
+    this.outlines.forEach(outline => {
+      if (outline.geometry) outline.geometry.dispose();
+      outline.parent?.remove(outline);
+    });
+    this.outlines = [];
+    if (this.outlineMaterial) {
+      this.outlineMaterial.dispose();
+    }
   }
 }

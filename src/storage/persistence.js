@@ -19,18 +19,32 @@ class Store {
 
   set(key, val) {
     this.data[key] = val;
+    this.save();
+  }
+
+  save() {
+    const tempPath = this.path + '.tmp';
     try {
-      fs.writeFileSync(this.path, JSON.stringify(this.data, null, 2));
+      // 1. Escreve no arquivo temporário
+      fs.writeFileSync(tempPath, JSON.stringify(this.data, null, 2));
+      // 2. Renomeia atomicamente (se falhar na escrita, o original é preservado)
+      fs.renameSync(tempPath, this.path);
     } catch (e) {
       console.error('[Persistence] Erro ao salvar dados:', e.message);
+      // Limpa o temporário se algo deu errado
+      if (fs.existsSync(tempPath)) {
+        try { fs.unlinkSync(tempPath); } catch (err) {}
+      }
     }
   }
 
   _parseDataFile(filePath, defaults) {
     try {
-      return JSON.parse(fs.readFileSync(filePath));
+      const data = fs.readFileSync(filePath, 'utf8');
+      if (!data.trim()) return defaults;
+      return JSON.parse(data);
     } catch (error) {
-      // Retorna default se não conseguir ler
+      console.warn(`[Persistence] Arquivo inválido ou corrompido: ${filePath}`, error.message);
       return defaults;
     }
   }

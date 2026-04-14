@@ -24,15 +24,15 @@ export class SceneManager {
   _initRenderer() {
     this.renderer = new THREE.WebGLRenderer({
       antialias: true,
-      alpha: true,         // fundo transparente
-      powerPreference: 'low-power', // economiza GPU
+      alpha: true,
+      powerPreference: 'low-power',
     });
 
     this.renderer.setSize(this.width, this.height);
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
-    this.renderer.setClearColor(0x000000, 0); // totalmente transparente
+    const pixelRatio = Math.min(window.devicePixelRatio || 1, 1.5);
+    this.renderer.setPixelRatio(pixelRatio);
+    this.renderer.setClearColor(0x000000, 0);
     
-    // 4.4 Sombra projetada
     this.renderer.shadowMap.enabled = true; 
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
@@ -47,7 +47,7 @@ export class SceneManager {
     const planeMat = new THREE.ShadowMaterial({ opacity: 0.25 });
     const plane = new THREE.Mesh(planeGeo, planeMat);
     plane.rotation.x = -Math.PI / 2;
-    plane.position.y = 0.05; // logo abaixo do personagem
+    plane.position.y = 0.01; // Quase no chão absoluto
     plane.receiveShadow = true;
     this.scene.add(plane);
   }
@@ -56,7 +56,7 @@ export class SceneManager {
     const aspect = this.width / this.height;
     this.camera = new THREE.PerspectiveCamera(45, aspect, 0.1, 100);
     this.camera.position.set(0, 1.2, 3.5);
-    this.camera.lookAt(0, 0.8, 0);
+    this.camera.lookAt(0, 0.9, 0); // Foco no peito/centro do personagem (1.8 total)
   }
 
   _initLights() {
@@ -101,7 +101,7 @@ export class SceneManager {
       const delta = timestamp - this._lastFrameTime;
       if (delta < FRAME_TIME) return; // limita a 30 FPS
 
-      this._lastFrameTime = timestamp - (delta % FRAME_TIME);
+      this._lastFrameTime = timestamp;
 
       for (const cb of this._onRenderCallbacks) {
         cb(delta / 1000); // passa delta em segundos
@@ -118,5 +118,39 @@ export class SceneManager {
       cancelAnimationFrame(this._animationId);
       this._animationId = null;
     }
+  }
+
+  dispose() {
+    this.stopLoop();
+    
+    this.renderer.dispose();
+    this.scene.traverse((object) => {
+      if (object.geometry) object.geometry.dispose();
+      
+      if (object.material) {
+        if (Array.isArray(object.material)) {
+          object.material.forEach(mat => this._disposeMaterial(mat));
+        } else {
+          this._disposeMaterial(object.material);
+        }
+      }
+    });
+
+    if (this.renderer.domElement && this.renderer.domElement.parentNode) {
+      this.renderer.domElement.parentNode.removeChild(this.renderer.domElement);
+    }
+  }
+
+  _disposeMaterial(mat) {
+    if (!mat) return;
+    mat.dispose();
+    
+    // Libera texturas comumente usadas
+    const textures = ['map', 'lightMap', 'bumpMap', 'normalMap', 'specularMap', 'envMap', 'metalnessMap', 'roughnessMap'];
+    textures.forEach(texName => {
+      if (mat[texName] && mat[texName].dispose) {
+        mat[texName].dispose();
+      }
+    });
   }
 }

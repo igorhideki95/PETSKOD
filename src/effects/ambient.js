@@ -39,8 +39,8 @@ export class AmbientManager {
     this.currentTheme = null;
     this._checkTime();
     
-    // Atualiza a cada 5 minutos
-    this._interval = setInterval(() => this._checkTime(), 5 * 60 * 1000);
+    // Atualiza a cada 1 minuto
+    this._interval = setInterval(() => this._checkTime(), 1 * 60 * 1000);
   }
 
   _checkTime() {
@@ -78,7 +78,7 @@ export class AmbientManager {
       this.lights.fillLight.color.setHex(theme.fillLight);
       this.lights.fillLight.intensity = theme.fillIntensity;
     }
-    console.log(`[Ambient] Tema de iluminação alterado para: ${themeName}`);
+    console.log(`[Ambient] Ciclo de iluminação atualizado: ${themeName.toUpperCase()}`);
   }
 
   destroy() {

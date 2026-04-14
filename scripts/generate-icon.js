@@ -76,4 +76,11 @@ fs.writeFileSync(path.join(outDir, 'petskod.png'), createCirclePNG(16, 124, 111,
 // Ícone maior para notificações
 fs.writeFileSync(path.join(outDir, 'petskod_32.png'), createCirclePNG(32, 124, 111, 255));
 
-console.log('[PETSKOD] Ícones gerados em assets/icons/');
+const COLORS = {
+  reset: "\x1b[0m",
+  green: "\x1b[32m",
+  bright: "\x1b[1m",
+  dim: "\x1b[2m"
+};
+
+console.log(`${COLORS.dim}[System]${COLORS.reset} ${COLORS.green}${COLORS.bright}Ícones de ativos gerados com sucesso${COLORS.reset} ${COLORS.dim}(assets/icons/)${COLORS.reset}`);

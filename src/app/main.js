@@ -1,13 +1,16 @@
 const { app, BrowserWindow, ipcMain, screen, Tray, Menu, nativeImage } = require('electron');
 const { exec } = require('child_process');
 const path = require('path');
+const fs = require('fs');
+const os = require('os');
+const logger = require('./logger');
 
 // ── Error Boundaries ──────────────────────────────────────────────────────────
 process.on('uncaughtException', (error) => {
-  console.error('[PETSKOD Fatal Erro]', error);
+  logger.error(error, 'Main Process (Uncaught)');
 });
 process.on('unhandledRejection', (reason) => {
-  console.error('[PETSKOD Unhandled Rejection]', reason);
+  logger.error(new Error(String(reason)), 'Main Process (Rejection)');
 });
 
 let mainWindow;
@@ -20,7 +23,7 @@ let store;
 function createWindow() {
   const { width, height } = screen.getPrimaryDisplay().workAreaSize;
 
-  const defaultBounds = { width: 250, height: 350, x: width - 280, y: height - 380 };
+  const defaultBounds = { width: 500, height: 500, x: width - 520, y: height - 520 };
   const bounds = store.get('windowBounds') || defaultBounds;
 
   mainWindow = new BrowserWindow({
@@ -51,7 +54,14 @@ function createWindow() {
   }
 
   mainWindow.webContents.on('console-message', (event, level, message, line, sourceId) => {
-    console.log(`[Renderer Line ${line}]: ${message}`);
+    // Tenta extrair a categoria entre colchetes, ex: [Character]
+    const match = message.match(/^\[([^\]]+)\]/);
+    const source = match ? match[1] : `Renderer:${line}`;
+    const cleanMessage = match ? message.replace(match[0], '').trim() : message;
+    
+    // Nível de log mapeado do Chromium
+    const levels = ['DEBUG', 'INFO', 'WARN', 'ERROR'];
+    logger.log(cleanMessage, levels[level] || 'INFO', source);
   });
 
   // Save bounds when window is moved
@@ -78,7 +88,6 @@ function createTray() {
     icon = nativeImage.createFromPath(iconPath);
     if (icon.isEmpty()) throw new Error('Ícone vazio');
   } catch {
-    // Fallback: círculo roxo 1x1 escalado
     icon = nativeImage.createEmpty();
   }
 
@@ -137,69 +146,154 @@ function toggleVisibility() {
 
 // ── IPC Handlers ──────────────────────────────────────────────────────────────
 
-// Mover janela via drag
+// Logging via IPC (do Renderer para o Main)
+ipcMain.on('log-error', (event, { message, stack }) => {
+  logger.error({ message, stack }, 'Processo de Renderização');
+});
+
 ipcMain.on('window-move', (event, { deltaX, deltaY }) => {
   if (!mainWindow) return;
   const [x, y] = mainWindow.getPosition();
   mainWindow.setPosition(x + deltaX, y + deltaY);
 });
 
-// Fechar app
-ipcMain.on('app-quit', () => app.quit());
-
-// Obter estado inicial persistido
-ipcMain.handle('get-last-state', () => {
-  return store ? store.get('lastState') : 'idle';
+ipcMain.on('set-ignore-mouse-events', (event, ignore, options) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  if (win) win.setIgnoreMouseEvents(ignore, options);
 });
 
-// App data para progression e stats
+ipcMain.on('app-quit', () => app.quit());
+
+ipcMain.handle('get-last-state', () => {
+  try {
+    return store ? store.get('lastState') : 'idle';
+  } catch (err) {
+    logger.error(err, 'Main (get-last-state)');
+    return 'idle';
+  }
+});
+
 ipcMain.handle('get-app-data', () => {
-  return store ? store.get('appData') : null;
+  try {
+    return store ? store.get('appData') : null;
+  } catch (err) {
+    logger.error(err, 'Main (get-app-data)');
+    return null;
+  }
+});
+
+ipcMain.handle('list-animations', async () => {
+  const animPath = path.join(__dirname, '../../assets/models/animations');
+  try {
+    if (!fs.existsSync(animPath)) {
+      fs.mkdirSync(animPath, { recursive: true });
+      return [];
+    }
+    const files = fs.readdirSync(animPath);
+    return files.filter(f => f.endsWith('.fbx') || f.endsWith('.glb'));
+  } catch (err) {
+    logger.error(err, 'Main (list-animations)');
+    return [];
+  }
 });
 
 ipcMain.on('save-app-data', (event, data) => {
   if (store) store.set('appData', data);
 });
 
-// TTS via PowerShell (Windows SAPI) — usa arquivo .ps1 temporário para evitar escape de aspas
-ipcMain.on('tts-speak', (event, rawText) => {
-  const text = String(rawText)
-    .replace(/[^\w\sáàãâéèêíìîóòõôúùûçÁÀÃÂÉÈÊÍÌÎÓÒÕÔÚÙÛÇ!?,.:;]/g, ' ')
-    .replace(/[\r\n]/g, ' ')
-    .trim()
-    .substring(0, 200);
-
-  if (!text) return;
-
-  const os = require('os');
-  const fsSync = require('fs');
-  const tmpFile = path.join(os.tmpdir(), `petskod_tts_${Date.now()}.ps1`);
-
-  const psScript = [
-    'Add-Type -AssemblyName System.Speech',
-    '$synth = New-Object System.Speech.Synthesis.SpeechSynthesizer',
-    `$synth.Speak(@'`,
-    text,
-    `'@)`,
-  ].join('\n');
-
+ipcMain.handle('list-models', async () => {
+  const modelsPath = path.join(__dirname, '../../assets/models');
   try {
-    fsSync.writeFileSync(tmpFile, psScript, 'utf8');
-    exec(`powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "${tmpFile}"`,
-      { timeout: 12000 },
-      (err) => {
-        try { fsSync.unlinkSync(tmpFile); } catch { /* ok */ }
-        if (err && !err.killed) {
-          console.warn('[TTS] Aviso:', err.message?.split('\n')[0]);
-        }
-      }
+    if (!fs.existsSync(modelsPath)) return [];
+    const files = fs.readdirSync(modelsPath); // CORREÇÃO: Usando 'fs' global
+    return files.filter(f => 
+      (f.startsWith('character') && (f.endsWith('.fbx') || f.endsWith('.glb')))
     );
-  } catch (writeErr) {
-    console.error('[TTS] Erro ao escrever script:', writeErr.message);
+  } catch (e) {
+    logger.error(e, 'Main (list-models)');
+    return [];
   }
 });
 
-// Notificação de mudança de estado (para atualizar o tray tooltip)
+ipcMain.on('tts-speak', (event, payload) => {
+  const isObject = typeof payload === 'object' && payload !== null;
+  const rawText = isObject ? payload.text : payload;
+  const rate = isObject ? (payload.rate || 0) : 0;
+  const pitch = isObject ? (payload.pitch || 'medium') : 'medium';
+
+  const text = String(rawText || '')
+    .replace(/[<>'"`;\\]/g, '') // Remove todos os caracteres potencialmente perigosos
+    .replace(/[\r\n\t]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .substring(0, 200);
+
+  if (!text || text.length < 1) {
+    logger.warn('TTS rejeitou texto vazio ou muito curto', 'TTS');
+    return;
+  }
+
+  const safeRate = typeof rate === 'number' && rate >= -10 && rate <= 10 ? rate : 0;
+  const validPitches = ['low', 'medium', 'high', 'x-low', 'x-high'];
+  const safePitch = validPitches.includes(String(pitch).toLowerCase()) ? pitch : 'medium';
+
+  const ssml = `<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='pt-BR'><prosody rate="${safeRate}" pitch="${safePitch}">${text}</prosody></speak>`;
+
+  const psScriptPath = path.join(app.getPath('userData'), 'tts-script.ps1');
+
+  try {
+    const escapedText = text.replace(/'/g, "''").replace(/"/g, '`"');
+    const scriptContent = `
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+Add-Type -AssemblyName System.Speech
+$synth = New-Object System.Speech.Synthesis.SpeechSynthesizer
+$synth.Rate = ${safeRate}
+switch ('${safePitch}') {
+  'x-low' { $synth.Volume = 50; $synth.SelectVoiceByHints([System.Speech.Synthesis.VoiceGender]::Female, [System.Speech.Synthesis.VoiceAge]::Child) }
+  'low' { $synth.Volume = 70 }
+  'high' { $synth.Volume = 100; $synth.SelectVoiceByHints([System.Speech.Synthesis.VoiceGender]::Female, [System.Speech.Synthesis.VoiceAge]::Teen) }
+  'x-high' { $synth.Volume = 100; $synth.SelectVoiceByHints([System.Speech.Synthesis.VoiceGender]::Female, [System.Speech.Synthesis.VoiceAge]::Child) }
+}
+$ssml = @'
+${ssml}
+'@
+try {
+  $synth.SpeakSsml($ssml)
+} catch {
+  $synth.Speak('${escapedText}')
+}
+`;
+
+    fs.writeFileSync(psScriptPath, scriptContent, 'utf8');
+
+    const { spawn } = require('child_process');
+    const child = spawn('powershell.exe', [
+      '-NoProfile',
+      '-NonInteractive',
+      '-ExecutionPolicy', 'Bypass',
+      '-File', psScriptPath
+    ]);
+
+    child.on('error', (err) => {
+      logger.error(err, 'TTS (Spawn Error)');
+    });
+
+    child.on('close', (code) => {
+      try { fs.unlinkSync(psScriptPath); } catch {}
+    });
+
+    const timer = setTimeout(() => {
+      child.kill();
+      try { fs.unlinkSync(psScriptPath); } catch {}
+    }, 12000);
+
+    child.on('exit', () => clearTimeout(timer));
+
+  } catch (err) {
+    logger.error(err, 'TTS (Main Handler)');
+  }
+});
+
 ipcMain.on('state-change', (event, state) => {
   if (store) store.set('lastState', state);
   if (!tray) return;
@@ -216,12 +310,10 @@ ipcMain.on('state-change', (event, state) => {
 // ── App lifecycle ─────────────────────────────────────────────────────────────
 
 app.whenReady().then(() => {
-  // Gera ícone se não existir
   try {
     require('../../scripts/generate-icon.js');
   } catch { /* silencioso */ }
 
-  // Inicializa Persistência
   const Store = require('../storage/persistence.js');
   store = new Store({
     configName: 'petskod-preferences',
@@ -230,11 +322,11 @@ app.whenReady().then(() => {
 
   createWindow();
   createTray();
+}).catch(err => {
+  logger.error(err, 'App Ready Lifecycle');
 });
 
 app.on('window-all-closed', () => {
-  // No macOS, manter o app rodando mesmo sem janelas é o padrão
-  // No Windows/Linux, sair
   if (process.platform !== 'darwin') tray?.destroy();
 });
 

@@ -85,8 +85,27 @@ export const PHRASES = {
   ]
 };
 
-/** Retorna uma frase aleatória de uma categoria */
-export function randomPhrase(category) {
+export const CHARACTER_PHRASES = {
+  granny: {
+    idle: ['Um dia de cada vez...', 'O tempo voa, aproveite-o.', 'Quer um conselho? Aprenda sempre.', 'Tenho muitas histórias...'],
+    happy: ['Puras alegrias!', 'Isso aquece meu coração.', 'Maravilhoso!', 'Hehe, que gentil.'],
+    reaction: ['Sim, querido?', 'O tempo é precioso.', 'Diga...'],
+  },
+  michelle: {
+    idle: ['Bora lá!', 'Pronta pro desafio!', 'Foco no objetivo!', 'Já zerou o dia hoje?'],
+    happy: ['AÊÊ! Mandou bem!', 'Top demais!', 'GG WP!', 'Incrível!'],
+    reaction: ['E aí!', 'Manda ver!', 'Sussa?', 'Bora!'],
+  }
+};
+
+/** Retorna uma frase aleatória de uma categoria, opcionalmente filtrada por personagem */
+export function randomPhrase(category, characterKey = null) {
+  // Tenta pegar do personagem específico primeiro
+  if (characterKey && CHARACTER_PHRASES[characterKey]?.[category]) {
+    const charList = CHARACTER_PHRASES[characterKey][category];
+    return charList[Math.floor(Math.random() * charList.length)];
+  }
+
   const list = PHRASES[category] || PHRASES.idle;
   return list[Math.floor(Math.random() * list.length)];
 }

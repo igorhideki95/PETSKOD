@@ -12,6 +12,8 @@ export const BehaviorState = {
   BORED: 'bored',
   SLEEPING: 'sleeping',
   REACTING: 'reacting',
+  FLAIR: 'flair',
+  DRAGGING: 'mousedragging',
 };
 
 // Tempos em ms para transições automáticas
@@ -38,11 +40,13 @@ export class BehaviorSystem {
 
     this.memory = new MemorySystem(callbacks.appData?.memory);
     this.leveling = new LevelingSystem(callbacks.appData?.leveling);
+    this.voiceSettings = callbacks.appData?.voiceSettings || { rate: 0, pitch: 'medium' };
 
     this._boredTimer = null;
     this._sleepTimer = null;
     this._happyTimer = null;
     this._speechTimer = null;
+    this._characterKey = null; // Ex: 'granny', 'michelle'
 
     this._start();
   }
@@ -67,7 +71,8 @@ export class BehaviorSystem {
     if (this._cb.onDataChange) {
       this._cb.onDataChange({
         memory: this.memory.getData(),
-        leveling: this.leveling.getData()
+        leveling: this.leveling.getData(),
+        voiceSettings: this.voiceSettings
       });
     }
   }
@@ -100,8 +105,36 @@ export class BehaviorSystem {
     if (this._state === newState) return;
     const prev = this._state;
     this._state = newState;
-    console.log(`[Behavior] ${prev} → ${newState}`);
+    console.log(`[Behavior] Transição de estado: ${prev} → ${newState}`);
     this._cb.onStateChange(newState);
+  }
+
+  setCharacterKey(key) {
+    this._characterKey = key;
+  }
+
+  setVoiceSettings(settings) {
+    this.voiceSettings = { ...this.voiceSettings, ...settings };
+    this._saveData();
+  }
+
+  getVoiceProfile(charDefaults) {
+    return {
+      rate: this.voiceSettings.rate !== undefined ? this.voiceSettings.rate : charDefaults.rate,
+      pitch: this.voiceSettings.pitch || charDefaults.pitch
+    };
+  }
+
+  /** Mata todos os timers e força um estado (ex: vindo do Tray) */
+  forceState(newState) {
+    clearTimeout(this._boredTimer);
+    clearTimeout(this._sleepTimer);
+    clearTimeout(this._happyTimer);
+    // Reinicia lógica dependendo do novo estado
+    this._setState(newState);
+    if (newState === BehaviorState.IDLE) {
+      this._scheduleBoredTransition();
+    }
   }
 
   // ── Interação ───────────────────────────────────────────────────────────────
@@ -109,45 +142,82 @@ export class BehaviorSystem {
   /** Chamado quando o usuário interage (clique, etc.) */
   interact() {
     const wasSleeping = this._state === BehaviorState.SLEEPING;
+    this._lastInteraction = Date.now();
+
+    if (wasSleeping) {
+      this.wakeUp();
+      return;
+    }
 
     clearTimeout(this._happyTimer);
 
     // Sistema de XP e Afinidade
     this.memory.interact();
-    const leveledUp = this.leveling.addXP(15, (newLevel) => {
+    const leveledUp = this.leveling.addXP(15);
+    
+    if (leveledUp) {
       this._speak('levelUp');
-      this._showStatus(`⭐ Lvl UP! (${newLevel})`, 4000);
-    });
+      this._showStatus(`⭐ Lvl UP! (${this.leveling.level})`, 4000);
+    }
 
     this._saveData();
 
-    if (!leveledUp) {
-      if (wasSleeping) {
-        this._speak('wakeUp');
-        this._showStatus('Acordei! 😮');
-      } else {
-        const tier = this.memory.getAffinityTier();
-        if (tier === 'best_friend') {
-          this._speak('reaction_bff');
-          this._showStatus('Você é o melhor! ❤️');
-          if (this._cb.onSpecialReaction) this._cb.onSpecialReaction('heart');
-        } else {
-          this._speak('reaction');
-          this._showStatus(`XP +15 ✨`);
-        }
-      }
+    // 10% de chance de fazer a dança Flair se estiver muito feliz
+    const tier = this.memory.getAffinityTier();
+    if (tier === 'best_friend' && Math.random() < 0.15) {
+      this.forceState(BehaviorState.FLAIR);
+      return;
     }
 
     this._setState(BehaviorState.HAPPY);
-    this._lastInteraction = Date.now();
-    this._scheduleBoredTransition(); // reseta os timers de tédio
+    if (tier === 'best_friend') {
+      this._speak('reaction_bff');
+      this._showStatus('Você é o melhor! ❤️');
+      if (this._cb.onSpecialReaction) this._cb.onSpecialReaction('heart');
+    } else {
+      this._speak('reaction');
+      this._showStatus('Feliz! 😊');
+    }
 
-    // Volta ao idle após HAPPY_DURATION
     this._happyTimer = setTimeout(() => {
       if (this._state === BehaviorState.HAPPY) {
         this._setState(BehaviorState.IDLE);
       }
     }, HAPPY_DURATION);
+
+    this._scheduleBoredTransition();
+  }
+
+  wakeUp() {
+    this._lastInteraction = Date.now();
+    this._setState(BehaviorState.IDLE);
+    this._speak('wakeUp');
+    this._showStatus('Acordando...');
+    this._scheduleBoredTransition();
+  }
+
+  // ── Arrastar (Drag) ────────────────────────────────────────────────────────
+  
+  startDragging() {
+    console.log('[Behavior] Iniciando Arrastre ☁️');
+    clearTimeout(this._boredTimer);
+    clearTimeout(this._sleepTimer);
+    clearTimeout(this._happyTimer);
+    clearTimeout(this._speechTimer);
+    
+    this._setState(BehaviorState.DRAGGING);
+    this._showStatus('Woooow! ☁️', 1500);
+  }
+
+  stopDragging() {
+    console.log(`[Behavior] Finalizando Arrastre (Estado atual: ${this._state}) 🛬`);
+    if (this._state !== BehaviorState.DRAGGING) return;
+    
+    this._setState(BehaviorState.IDLE);
+    this._lastInteraction = Date.now();
+    this._scheduleBoredTransition();
+    this._scheduleSpeech();
+    this._showStatus('Pouso seguro! 🛬');
   }
 
   // ── Fala aleatória ──────────────────────────────────────────────────────────
@@ -176,7 +246,7 @@ export class BehaviorSystem {
   }
 
   _speak(category) {
-    const phrase = randomPhrase(category);
+    const phrase = randomPhrase(category, this._characterKey);
     this._cb.onSpeak(phrase);
   }
 

@@ -11,8 +11,16 @@ import { AmbientManager } from '../effects/ambient.js';
 import { HeartEmitter } from '../effects/hearts.js';
 
 // ── Error Boundaries ──────────────────────────────────────────────────────────
-window.onerror = function (message, source, lineno, colno, error) { console.log('__STACK_TRACE__' + (error && error.stack));
-  console.error('[PETSKOD Error]', message, error);
+window.onerror = function (message, source, lineno, colno, error) {
+  console.error('[System] Erro fatal detectado no processo Renderer:', message, error);
+  
+  if (window.petskodAPI?.logError) {
+    window.petskodAPI.logError({
+      message: message,
+      stack: error?.stack || `at ${source}:${lineno}:${colno}`
+    });
+  }
+
   const statusEl = document.getElementById('status-label');
   if (statusEl) {
     statusEl.textContent = 'Erro interno ⚠️';
@@ -20,109 +28,319 @@ window.onerror = function (message, source, lineno, colno, error) { console.log(
     setTimeout(() => statusEl.classList.remove('visible'), 3000);
   }
 };
-window.onunhandledrejection = function (event) { console.log('__REJECTION_STACK__' + (event.reason && event.reason.stack));
-  console.error('[PETSKOD Unhandled Rejection]', event.reason);
+
+window.onunhandledrejection = function (event) {
+  console.error('[System] Rejeição de promessa não tratada (Unhandled Rejection):', event.reason);
+  if (window.petskodAPI?.logError) {
+    window.petskodAPI.logError({
+      message: String(event.reason),
+      stack: event.reason?.stack || 'Promessa rejeitada sem stack'
+    });
+  }
 };
 
-// ── Configuração ──────────────────────────────────────────────────────────────
-const MODEL_PATH = './assets/models/character.glb';
+// ── UI Manager ──────────────────────────────────────────────────────────────
+class UIManager {
+  constructor() {
+    this._statusEl = document.getElementById('status-label');
+    this._speechBubble = document.getElementById('speech-bubble');
+    this._speechText = document.getElementById('speech-text');
+    this._contextMenu = document.getElementById('context-menu');
+    this._characterList = document.getElementById('character-list');
+    this._menuMain = document.getElementById('menu-main');
+    this._menuSettings = document.getElementById('menu-settings');
+    this._statusTimeout = null;
+    this._speechTimeout = null;
 
-// ── Status Label helper ───────────────────────────────────────────────────────
-class StatusLabel {
-  constructor(el) {
-    this._el = el;
-    this._timeout = null;
+    this._initContextMenu();
   }
 
-  show(text, duration = 2500) {
-    if (!this._el) return;
-    this._el.textContent = text;
-    this._el.classList.add('visible');
-    clearTimeout(this._timeout);
-    this._timeout = setTimeout(() => this._el.classList.remove('visible'), duration);
+  _initContextMenu() {
+    if (!this._contextMenu) return;
+    this._contextMenu.addEventListener('click', (e) => {
+      const item = e.target.closest('.menu-item');
+      if (!item) return;
+
+      const action = item.getAttribute('data-action');
+      const modelName = item.getAttribute('data-model');
+      const isQuit = item.getAttribute('action-quit');
+
+      if (isQuit) {
+        window.petskodAPI?.quitApp();
+      } else if (modelName && this.onCharacterChange) {
+        this.onCharacterChange(modelName);
+      } else if (action && this.onAction) {
+        this.onAction(action);
+      }
+      this.hideContextMenu();
+    });
+
+    window.addEventListener('click', () => this.hideContextMenu());
+  }
+
+  updateCharacterList(models, current) {
+    if (!this._characterList) return;
+    this._characterList.innerHTML = '';
+    models.forEach(m => {
+      const item = document.createElement('div');
+      item.className = 'menu-item';
+      item.setAttribute('data-model', m);
+      const isCurrent = m === current;
+      item.innerHTML = `${isCurrent ? '🔘' : '⚪'} ${m.replace('character-', '').replace('.fbx', '').replace('.glb', '')}`;
+      if (isCurrent) item.style.fontWeight = '800';
+      this._characterList.appendChild(item);
+    });
+  }
+
+  showStatus(text, duration = 2500) {
+    if (!this._statusEl) return;
+    this._statusEl.textContent = text;
+    this._statusEl.classList.add('visible');
+    clearTimeout(this._statusTimeout);
+    this._statusTimeout = setTimeout(() => this._statusEl.classList.remove('visible'), duration);
+  }
+
+  showSpeech(text) {
+    if (!this._speechBubble || !this._speechText) return;
+    this._speechText.textContent = text;
+    this._speechBubble.classList.add('visible');
+    clearTimeout(this._speechTimeout);
+    const duration = Math.max(2000, text.length * 105);
+    this._speechTimeout = setTimeout(() => this._speechBubble.classList.remove('visible'), duration);
+  }
+
+  showContextMenu(x, y) {
+    if (!this._contextMenu) return;
+    
+    this._contextMenu.style.display = 'flex';
+    const menuWidth = this._contextMenu.offsetWidth || 165;
+    const menuHeight = Math.min(this._contextMenu.scrollHeight, 420);
+    this._contextMenu.style.display = 'none';
+    
+    const container = document.getElementById('app');
+    const windowWidth = container?.clientWidth || 500;
+    const windowHeight = container?.clientHeight || 500;
+    
+    const padding = 10;
+    let posX = Math.max(padding, Math.min(x, windowWidth - menuWidth - padding));
+    let posY = Math.max(padding, Math.min(y, windowHeight - menuHeight - padding));
+
+    this._contextMenu.style.left = `${posX}px`;
+    this._contextMenu.style.top = `${posY}px`;
+    this._contextMenu.style.display = 'flex';
+    
+    this.switchMenu('main');
+  }
+
+  hideContextMenu() {
+    if (this._contextMenu) this._contextMenu.style.display = 'none';
+    if (this.onUIHoverChange) this.onUIHoverChange(false);
+  }
+
+  switchMenu(target) {
+    if (!this._menuMain || !this._menuSettings) return;
+    
+    if (target === 'settings') {
+      this._menuMain.style.display = 'none';
+      this._menuSettings.style.display = 'flex';
+    } else {
+      this._menuMain.style.display = 'flex';
+      this._menuSettings.style.display = 'none';
+    }
+  }
+
+  /** Vincula ao InputManager para gerenciar o passthrough do mouse */
+  bindInputExclusions(inputManager) {
+    this.onUIHoverChange = (isOver) => {
+      inputManager.isOverUI = isOver;
+    };
+
+    const elements = [this._contextMenu, document.getElementById('btn-close')].filter(Boolean);
+    
+    elements.forEach(el => {
+      el.addEventListener('mouseenter', () => this.onUIHoverChange(true));
+      el.addEventListener('mouseleave', () => {
+        // Se for o menu, só sai do modo UI se ele estiver escondido ou se o mouse saiu dele de verdade
+        if (el === this._contextMenu && this._contextMenu.style.display !== 'none') return;
+        this.onUIHoverChange(false);
+      });
+      
+      // Impede que o scroll chegue no sistema (desfocando janelas de fundo)
+      el.addEventListener('wheel', (e) => e.stopPropagation(), { passive: false });
+    });
+  }
+
+  dispose() {
+    clearTimeout(this._statusTimeout);
+    clearTimeout(this._speechTimeout);
   }
 }
 
-// ── Bootstrap ─────────────────────────────────────────────────────────────────
 async function init() {
   const container = document.getElementById('app');
-  const statusEl = document.getElementById('status-label');
   const btnClose = document.getElementById('btn-close');
-  const speechBubble = document.getElementById('speech-bubble');
-  const speechText = document.getElementById('speech-text');
+  const ui = new UIManager();
 
-  let speechBubbleTimeout = null;
-  function showSpeechBubble(text) {
-    if (!speechBubble || !speechText) return;
-    speechText.textContent = text;
-    speechBubble.classList.add('visible');
-    clearTimeout(speechBubbleTimeout);
-    const duration = Math.max(2000, text.length * 80);
-    speechBubbleTimeout = setTimeout(() => speechBubble.classList.remove('visible'), duration);
+  // 1. Vincula o botão de fechar IMEDIATAMENTE para garantir controle do usuário
+  // Isso deve vir antes de qualquer carregamento pesado (Three.js, modelos)
+  if (btnClose) {
+    btnClose.addEventListener('click', () => {
+      console.log('[Renderer] Solicitando encerramento da aplicação via botão de interface...');
+      window.petskodAPI?.quitApp();
+    });
   }
 
-  const statusLabel = new StatusLabel(statusEl);
-
-  // 1. Cena Three.js
+  // 2. Cena Three.js
   const sceneManager = new SceneManager(container);
-
-  // 1.5 Tema dia/noite
   const ambientManager = new AmbientManager(sceneManager.scene, sceneManager.lights);
-
-  // 2. Personagem
   const character = new Character(sceneManager.scene);
-
-  // 3. TTS
   const tts = new TTSEngine();
-
-  // 4. Estado inicial da persistência
-  const initialState = window.petskodAPI?.getLastState ? await window.petskodAPI.getLastState() : 'idle';
-  const appData = window.petskodAPI?.getAppData ? await window.petskodAPI.getAppData() : null;
-
   const heartEmitter = new HeartEmitter(sceneManager.scene);
 
-  // 5. Sistema de comportamento
+  let appData = {};
+  try {
+    appData = window.petskodAPI?.getAppData ? await window.petskodAPI.getAppData() : {};
+  } catch (err) {
+    console.warn('[Renderer] Falha ao obter appData:', err);
+  }
+  let currentModelFile = appData.selectedModel || 'character.fbx';
+
+  // 2. Sistema de comportamento
   const behavior = new BehaviorSystem({
-    initialState,
+    initialState: appData.lastState || 'idle',
     appData,
     onStateChange: (state) => {
-      character.applyBehaviorState(state);
+      if (state === 'flair') {
+        character.playSequence(['dance-flair-initial', 'dance-flair-middle', 'dance-flair-finishing'], {
+          onComplete: () => behavior.forceState('idle')
+        });
+      } else {
+        character.applyBehaviorState(state);
+      }
       if (window.petskodAPI) window.petskodAPI.notifyStateChange(state);
     },
     onSpeak: (text) => {
-      tts.speak(text);
-      showSpeechBubble(text);
+      const profile = behavior.getVoiceProfile(character.voiceProfile);
+      tts.speak(text, profile);
+      ui.showSpeech(text);
     },
-    onStatus: (text, duration) => {
-      statusLabel.show(text, duration);
-    },
+    onStatus: (text, duration) => ui.showStatus(text, duration),
     onSpecialReaction: (type) => {
-      if (type === 'heart') {
-        heartEmitter.emit(character.model ? character.model.position : character._placeholder.position, 4);
-      }
+      if (type === 'heart') heartEmitter.emit(character.model?.position || {x:0, y:0.5, z:0}, 5);
     },
     onDataChange: (data) => {
-      if (window.petskodAPI?.saveAppData) {
-        window.petskodAPI.saveAppData(data);
-      }
+      const fullData = { ...data, selectedModel: currentModelFile };
+      window.petskodAPI?.saveAppData(fullData);
     }
   });
 
-  // 5. Tenta carregar modelo GLB
-  try {
+  // 3. Loader de Personagem
+  const loadCharacter = async (filename, isRetry = false) => {
+    ui.showStatus(isRetry ? 'Tentando novamente...' : 'Carregando...', 1500);
     const loader = new ModelLoader();
-    const { scene: modelScene, animations } = await loader.load(MODEL_PATH);
-    character.init(modelScene, animations);
-    console.log('[PETSKOD] Modelo GLB carregado!');
-  } catch {
-    console.warn('[PETSKOD] Usando personagem placeholder.');
-    character.initPlaceholder();
+    const modelPath = `./assets/models/${filename}`;
+    
+    try {
+      const mainResult = await loader.load(modelPath);
+      
+      let extraClips = [];
+      if (window.petskodAPI?.listAnimations) {
+        try {
+          const animFiles = await window.petskodAPI.listAnimations();
+          const animUrls = animFiles.map(f => `./assets/models/animations/${f}`);
+          extraClips = await loader.loadAnimations(animUrls);
+        } catch (animErr) {
+          console.warn('[Renderer] Falha ao carregar animações extras:', animErr);
+        }
+      }
+      
+      character.init(mainResult.scene, [...mainResult.animations, ...extraClips]);
+      currentModelFile = filename;
+
+      const charKey = filename.toLowerCase().includes('granny') ? 'granny' : 
+                      filename.toLowerCase().includes('michelle') ? 'michelle' : null;
+      behavior.setCharacterKey(charKey);
+      
+      try {
+        const allModels = await window.petskodAPI.listModels();
+        ui.updateCharacterList(allModels, currentModelFile);
+      } catch (modelErr) {
+        console.warn('[Renderer] Falha ao listar modelos:', modelErr);
+      }
+      
+      ui.showStatus('Pronto!', 1500);
+      return true;
+    } catch (e) {
+      console.error('[Renderer] Falha ao carregar personagem:', e);
+      
+      if (!isRetry) {
+        console.log('[Renderer] Tentando modelo padrão como fallback...');
+        return loadCharacter('character.fbx', true);
+      }
+      
+      ui.showStatus('Erro ao carregar modelo', 4000);
+      character.initPlaceholder();
+      return false;
+    }
+  };
+
+  // 4. Ações
+  ui.onAction = (action) => {
+    switch (action) {
+      case 'feed': ui.showStatus('Hummm! 🍕'); behavior.interact(); break;
+      case 'play': behavior.forceState('happy'); break;
+      case 'pet': behavior.interact(); break;
+      case 'dance-flair': behavior.forceState('flair'); break;
+      case 'dance-random': {
+        const dances = ['dance-chicken', 'dance-salsa', 'dance-samba', 'dance-shuffling', 'dance-hiphop'];
+        const d = dances[Math.floor(Math.random()*dances.length)];
+        character.playAnimation(d, false);
+        setTimeout(() => behavior.forceState('idle'), 4000);
+        break;
+      }
+      case 'exercise': {
+        const ex = ['exercise-plank', 'exercise-situps'];
+        character.playAnimation(ex[Math.floor(Math.random()*ex.length)], true);
+        setTimeout(() => behavior.forceState('idle'), 6000);
+        break;
+      }
+      case 'toggle-sleep':
+        behavior.forceState(behavior.state === 'sleeping' ? 'idle' : 'sleeping');
+        break;
+      
+      // Ajustes de voz
+      case 'voice-rate--2': behavior.setVoiceSettings({ rate: -2 }); ui.showStatus('Voz: Lenta 🐢'); break;
+      case 'voice-rate-0':  behavior.setVoiceSettings({ rate: 0 });  ui.showStatus('Voz: Normal 🚶'); break;
+      case 'voice-rate-3':  behavior.setVoiceSettings({ rate: 3 });  ui.showStatus('Voz: Rápida ⚡'); break;
+      
+      case 'voice-pitch-low':    behavior.setVoiceSettings({ pitch: 'low' });    ui.showStatus('Tom: Grave 📉'); break;
+      case 'voice-pitch-medium': behavior.setVoiceSettings({ pitch: 'medium' }); ui.showStatus('Tom: Normal ↔️'); break;
+      case 'voice-pitch-high':   behavior.setVoiceSettings({ pitch: 'high' });   ui.showStatus('Tom: Agudo 📈'); break;
+      
+      case 'view-settings': ui.switchMenu('settings'); break;
+      case 'view-main':     ui.switchMenu('main'); break;
+    }
+  };
+
+  ui.onCharacterChange = (newModel) => {
+    loadCharacter(newModel);
+    behavior.interact(); // Reage à troca
+  };
+
+  // Carga inicial
+  const loaded = await loadCharacter(currentModelFile);
+  if (!loaded) {
+    // initPlaceholder() já foi chamado dentro de loadCharacter() no caminho de erro.
+    console.warn('[Renderer] Modelo não carregado — usando placeholder gerado no loadCharacter().');
   }
 
-  // 6. Input — passa a cena também para a trilha
-  const inputManager = new InputManager(sceneManager.renderer, sceneManager.camera, character, behavior, sceneManager.scene);
+  // 5. Input
+  const inputManager = new InputManager(
+    sceneManager.renderer, sceneManager.camera, character, behavior, sceneManager.scene,
+    (x, y) => ui.showContextMenu(x, y)
+  );
+  ui.bindInputExclusions(inputManager);
 
-  // 7. Loop de render
   sceneManager.onRender((delta) => {
     character.update(delta);
     inputManager.update(delta);
@@ -130,27 +348,18 @@ async function init() {
   });
   sceneManager.startLoop();
 
-  // 8. Botão fechar
-  btnClose.addEventListener('click', () => window.petskodAPI?.quitApp());
-
-  // 9. Comandos do main process (via tray)
   if (window.petskodAPI) {
-    window.petskodAPI.onSpeechTest(() => {
-      tts.speak('Olá! Eu sou o PETSKOD!');
-      showSpeechBubble('Olá! Eu sou o PETSKOD! 🐾');
-    });
-
-    window.petskodAPI.onForceState((state) => {
-      behavior._setState(state);
-      character.applyBehaviorState(state);
-    });
+    window.petskodAPI.onForceState(s => behavior.forceState(s));
+    window.petskodAPI.onContextMenuAction(a => ui.onAction(a));
   }
 
-  // ── Balão de fala ─────────────────────────────────────────────────────────
-
-
-
-  console.log('[PETSKOD] Phase 2 iniciada! 🎉');
+  window.addEventListener('beforeunload', () => {
+    behavior.destroy();
+    ambientManager.destroy();
+    sceneManager.dispose();
+    character.dispose();
+    ui.dispose();
+  });
 }
 
 init().catch(console.error);

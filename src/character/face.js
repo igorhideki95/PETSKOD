@@ -3,20 +3,22 @@ import * as THREE from 'three';
 export class FaceController {
   constructor(characterMesh) {
     this.mesh = characterMesh;
-    
-    // Tenta encontrar os olhos pelo nome na hierarquia
-    this.leftEye = this.mesh.getObjectByName('LeftEye');
-    this.rightEye = this.mesh.getObjectByName('RightEye');
+    this._refreshEyes();
     
     this.blinkTimer = 0;
-    this.blinkInterval = Math.random() * 3 + 2; // 2 a 5 segundos
+    this.blinkInterval = Math.random() * 3 + 2;
     this.isBlinking = false;
-    this.blinkDuration = 0.15; // 150ms rápido
+    this.blinkDuration = 0.15;
     this.blinkProgress = 0;
     
-    // Alvo para onde os olhos "olhariam"
     this.target = new THREE.Vector3(0, 0, 5);
     this.currentLook = new THREE.Vector3(0, 0, 1);
+  }
+
+  _refreshEyes() {
+    if (!this.mesh) return;
+    this.leftEye = this.mesh.getObjectByName('LeftEye');
+    this.rightEye = this.mesh.getObjectByName('RightEye');
   }
 
   lookAt(x, y, z) {
@@ -24,7 +26,10 @@ export class FaceController {
   }
 
   update(delta) {
-    // 1. Lógica do Piscar
+    if ((!this.leftEye || !this.rightEye) && this.mesh) {
+      this._refreshEyes();
+    }
+
     this.blinkTimer += delta;
     if (!this.isBlinking && this.blinkTimer > this.blinkInterval) {
       this.isBlinking = true;
@@ -36,11 +41,10 @@ export class FaceController {
       this.blinkProgress += delta;
       const t = this.blinkProgress / this.blinkDuration;
       
-      // Animação vai-e-volta (Ping pong): 1 -> 0.1 -> 1
       if (t < 0.5) {
-        eyeScaleY = 1.0 - (t * 2 * 0.9); // fecha
+        eyeScaleY = 1.0 - (t * 2 * 0.9);
       } else if (t < 1.0) {
-        eyeScaleY = 0.1 + ((t - 0.5) * 2 * 0.9); // abre
+        eyeScaleY = 0.1 + ((t - 0.5) * 2 * 0.9);
       } else {
         this.isBlinking = false;
         this.blinkTimer = 0;
@@ -49,7 +53,6 @@ export class FaceController {
       }
     }
 
-    // Aplica a escala Y se os olhos existirem (piscar)
     if (this.leftEye) this.leftEye.scale.y = eyeScaleY;
     if (this.rightEye) this.rightEye.scale.y = eyeScaleY;
 
