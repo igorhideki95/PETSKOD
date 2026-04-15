@@ -146,26 +146,21 @@ export class Character {
     this.model.matrixAutoUpdate = true;
 
     // ── Normalização de escala ──
-    // O FBXLoader já aplica fator 0.01 (cm→m). Calcula o bounding box depois
-    // de ADICIONAR à cena para ter a worldMatrix correta.
-    this.scene.add(this.model);
+    // Calcula bounding box ANTES de aplicar nossa escala (em default scale do loader).
+    // Depois usa esses valores multiplicados pelo fator de escala para posicionar.
     const box = new THREE.Box3().setFromObject(this.model);
-    const size = box.getSize(new THREE.Vector3());
-    const maxDim = Math.max(size.x, size.y, size.z) || 1;
     const center = box.getCenter(new THREE.Vector3());
+    const size   = box.getSize(new THREE.Vector3());
+    const maxDim = Math.max(size.x, size.y, size.z) || 1;
 
-    const targetHeight = 1.8;
-    const scale = targetHeight / maxDim;
+    const scale = 1.8 / maxDim;
     this._baseScale = scale;
-
     this.model.scale.setScalar(scale);
 
-    // Reposiciona para que o pé fique no chão
-    this.scene.remove(this.model);
-    const box2 = new THREE.Box3().setFromObject(this.model);
+    // Posiciona centralizando X/Z e pousando Y no chão
     this.model.position.set(
       -center.x * scale,
-      -box2.min.y + 0.02,
+      (-box.min.y * scale) + 0.02,
       -center.z * scale
     );
     this._initialPosition.copy(this.model.position);
@@ -541,8 +536,8 @@ export class Character {
     if (this.face)    this.face.update(delta);
     if (this.outline) this.outline.update(delta);
 
-    // Float suave
-    const floatY = Math.sin(Date.now() * 0.003) * 0.05;
+    // Float suave — amplitude e velocidade mínimas para não ser visualmente perturbador
+    const floatY = Math.sin(Date.now() * 0.0008) * 0.012;
     this.model.position.set(
       this._initialPosition.x,
       this._initialPosition.y + floatY,
