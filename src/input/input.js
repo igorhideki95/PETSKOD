@@ -95,12 +95,22 @@ export class InputManager {
       if (isNaN(this._mouse.y)) this._mouse.y = 0;
     }
 
+    // ── CRÍTICO: quando sobre UI, garante que o passthrough está DESLIGADO ──
+    // Sem isso, _isIgnoringMouse=true de um estado anterior faz cliques no btn-close
+    // passarem pela janela para o desktop.
+    if (this.isOverUI) {
+      if (this._isIgnoringMouse && window.petskodAPI?.setIgnoreMouseEvents) {
+        window.petskodAPI.setIgnoreMouseEvents(false);
+        this._isIgnoringMouse = false;
+      }
+    }
+
     // ── Não atualiza face durante drag (evita chamadas sobre bones) ──
-    if (!this._isDragging && this.character?.face) {
+    if (!this._isDragging && !this.isOverUI && this.character?.face) {
       this.character.face.lookAt(this._mouse.x * 2, this._mouse.y * 2, 5);
     }
 
-    // ── Passthrough — só fora do drag ──
+    // ── Passthrough — só fora do drag e fora da UI ──
     if (!this._isDragging && !this.isOverUI && window.petskodAPI?.setIgnoreMouseEvents) {
       this._passthroughThrottle++;
       if (this._passthroughThrottle % 3 === 0) {

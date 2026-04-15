@@ -25,22 +25,6 @@ const STATE_COLORS = {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Utilitários de transform
-// ─────────────────────────────────────────────────────────────────────────────
-
-function freezeTransform(obj, baseScale) {
-  obj.scale.setScalar(baseScale);
-  obj.matrixAutoUpdate = false;
-  obj.matrix.compose(obj.position, obj.quaternion, obj.scale);
-  obj.matrixWorldNeedsUpdate = true;
-}
-
-function unfreezeTransform(obj) {
-  obj.matrixAutoUpdate = true;
-  obj.matrixWorldNeedsUpdate = true;
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
 // Filtro de tracks de animação (cobre todos os formatos Mixamo FBX/GLB)
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -116,13 +100,13 @@ export class Character {
 
     if (this.mixer) {
       this.mixer.stopAllAction();
-      this.mixer.uncacheRoot(this.model);
+      if (this.model) this.mixer.uncacheRoot(this.model);
       this.mixer = null;
     }
     if (this.face)    { try { this.face.dispose(); }    catch {} this.face    = null; }
     if (this.outline) { try { this.outline.dispose(); } catch {} this.outline = null; }
     if (this.model) {
-      unfreezeTransform(this.model);
+      this.model.matrixAutoUpdate = true; // garante que nunca fica preso
       try { this.scene.remove(this.model); } catch {}
       this._disposeObject(this.model);
       this.model = null;
@@ -393,16 +377,14 @@ export class Character {
     if (!this.model || this._isDragLocked) return;
     this._isDragLocked = true;
 
-    // Para TODAS as actions do mixer: nenhuma track roda durante o drag
+    // Para o mixer completamente (sem nenhuma action ativa durante drag)
     if (this.mixer) {
       this.mixer.timeScale = 0;
-      // Força o mixer a não avançar aplicando stopAllAction
-      // (pausa completa, sem acumular transforms)
       this.mixer.stopAllAction();
     }
 
-    // Congela a matrix do modelo (impede qualquer modificação externa de transform)
-    freezeTransform(this.model, this._baseScale);
+    // Força a escala imediatamente — o update() vai continuar forçando frame a frame
+    this.model.scale.setScalar(this._baseScale);
 
     if (this.outline) this.outline.hide();
     console.log(`[Character] DRAG START — scale=${this._baseScale.toFixed(5)}`);
@@ -412,13 +394,11 @@ export class Character {
     if (!this.model || !this._isDragLocked) return;
     this._isDragLocked = false;
 
-    // Descongela a matrix
-    unfreezeTransform(this.model);
-
-    // Garante que a escala está no valor base pós-drag
+    // Garante que a escala está limpa pós-drag
     this.model.scale.setScalar(this._baseScale);
+    this.model.matrixAutoUpdate = true;
 
-    // Retoma a animação de idle
+    // Retoma o mixer
     if (this.mixer) {
       this.mixer.timeScale = 1;
       const startAnim = this.animations['idle'] ? 'idle' : Object.keys(this.animations)[0];
@@ -520,14 +500,11 @@ export class Character {
     // ── Caminho do Modelo GLB/FBX ───────────────────────────────────────────
     if (!this.model) return;
 
-    // DRAG LOCK ATIVO: modelo está com matrixAutoUpdate=false.
-    // Não faz NADA — nem mixer, nem float, nem escala.
+    // DRAG LOCK ATIVO: força a escala correta todo frame — abordagem infalível.
+    // O Three.js atualiza matrizes de nós filhos mesmo com matrixAutoUpdate=false no root,
+    // então a única garantia real é sobrescrever scale.x/y/z a cada frame.
     if (this._isDragLocked) {
-      // Garante redundantemente que a escala não foi violada
-      if (this.model.matrixAutoUpdate) {
-        // Alguém descongelou a matrix inesperadamente — re-congela
-        freezeTransform(this.model, this._baseScale);
-      }
+      this.model.scale.setScalar(this._baseScale);
       return;
     }
 
