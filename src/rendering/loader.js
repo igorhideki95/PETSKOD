@@ -3,15 +3,20 @@
 
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
+import { FBXLoader }  from 'three/addons/loaders/FBXLoader.js';
 
+/**
+ * Clona um AnimationClip de forma profunda, preservando o tipo correto de cada track.
+ * Garante que clips compartilhados pelo loader não sejam mutados pelo filtro de tracks.
+ */
 function cloneAnimationClip(clip) {
   const clonedTracks = clip.tracks.map(track => {
     const TrackType = track.constructor;
     return new TrackType(
       track.name,
       track.times.slice(),
-      track.values.slice()
+      track.values.slice(),
+      track.interpolation
     );
   });
   return new THREE.AnimationClip(clip.name, clip.duration, clonedTracks);
@@ -20,7 +25,7 @@ function cloneAnimationClip(clip) {
 export class ModelLoader {
   constructor() {
     this._gltfLoader = new GLTFLoader();
-    this._fbxLoader = new FBXLoader();
+    this._fbxLoader  = new FBXLoader();
   }
 
   async load(url) {
@@ -32,50 +37,45 @@ export class ModelLoader {
         url,
         (result) => {
           let animations = [];
-          if (result.animations && result.animations.length > 0) {
+
+          if (result.animations?.length) {
             animations = result.animations.map(clip => cloneAnimationClip(clip));
           }
-          
+
           if (isFBX) {
-            resolve({
-              scene: result,
-              animations: animations,
-            });
+            resolve({ scene: result, animations });
           } else {
-            resolve({
-              scene: result.scene,
-              animations: animations,
-            });
+            resolve({ scene: result.scene, animations });
           }
         },
         undefined,
-        (error) => {
-          reject(error);
-        }
+        reject
       );
     });
   }
 
+  /**
+   * Carrega múltiplos arquivos de animação extra (FBX do Mixamo).
+   * Cada arquivo recebe o nome do arquivo como nome do clip.
+   */
   async loadAnimations(urls) {
     const clips = [];
-    
+
     for (const url of urls) {
       try {
-        const result = await this.load(url);
-        if (result.animations && result.animations.length > 0) {
-          const filename = url.split('/').pop().split('.').shift();
-          
-          result.animations.forEach(clip => {
-            const newClip = cloneAnimationClip(clip);
-            newClip.name = filename;
-            clips.push(newClip);
-          });
+        const result   = await this.load(url);
+        const filename = url.split('/').pop().replace(/\.[^.]+$/, ''); // sem extensão
+
+        for (const clip of result.animations) {
+          const named   = cloneAnimationClip(clip);
+          named.name    = filename.toLowerCase();
+          clips.push(named);
         }
       } catch (e) {
-        console.warn(`[ModelLoader] Erro ao carregar animação extra (${url}):`, e);
+        console.warn(`[ModelLoader] Falha ao carregar animação (${url}):`, e);
       }
     }
-    
+
     return clips;
   }
 }

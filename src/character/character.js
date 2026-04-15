@@ -1,5 +1,5 @@
-// character/character.js — Refatorado (drag-safe)
-// Gerencia o personagem 3D com suporte a estados visuais por comportamento
+// character/character.js — v3 (drag-proof)
+// Sistema de snapshot completo: para o mixer por inteiro durante drag.
 
 import * as THREE from 'three';
 import { FaceController } from './face.js';
@@ -15,7 +15,6 @@ export const CharacterState = {
   DRAGGING: 'mousedragging',
 };
 
-// Cores do placeholder por estado
 const STATE_COLORS = {
   [CharacterState.IDLE]:     new THREE.Color(0x7c6fff),
   [CharacterState.HAPPY]:    new THREE.Color(0xffcf47),
@@ -25,86 +24,118 @@ const STATE_COLORS = {
   [CharacterState.DRAGGING]: new THREE.Color(0xadd8e6),
 };
 
-// ── Utilitário: snapshot/restore de transform ────────────────────────────────
-function captureTransform(obj) {
-  return {
-    position: obj.position.clone(),
-    quaternion: obj.quaternion.clone(),
-    scale: obj.scale.clone(),
-  };
+// ─────────────────────────────────────────────────────────────────────────────
+// Utilitários de transform
+// ─────────────────────────────────────────────────────────────────────────────
+
+function freezeTransform(obj, baseScale) {
+  obj.scale.setScalar(baseScale);
+  obj.matrixAutoUpdate = false;
+  obj.matrix.compose(obj.position, obj.quaternion, obj.scale);
+  obj.matrixWorldNeedsUpdate = true;
 }
-function restoreTransform(obj, snap) {
-  obj.position.copy(snap.position);
-  obj.quaternion.copy(snap.quaternion);
-  obj.scale.copy(snap.scale);
+
+function unfreezeTransform(obj) {
+  obj.matrixAutoUpdate = true;
+  obj.matrixWorldNeedsUpdate = true;
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Filtro de tracks de animação (cobre todos os formatos Mixamo FBX/GLB)
+// ─────────────────────────────────────────────────────────────────────────────
+
+const SCALE_PATTERN = /\.(scale|s)$/i;
+const ROOT_BONE_PATTERN = /^(hips|root|pelvis|armature|mixamorigarmaure)/i;
+
+function stripDangerousTracks(clip) {
+  const before = clip.tracks.length;
+  clip.tracks = clip.tracks.filter(track => {
+    const name = track.name;
+    // Remove qualquer track de escala (todos os formatos)
+    if (SCALE_PATTERN.test(name)) return false;
+
+    // Extraímos o nome do osso (parte antes do primeiro '.' ou '[')
+    const boneName = name.split(/[.\[]/)[0];
+
+    // Remove track de posição do root bone (causa drift/scale vertical)
+    if (ROOT_BONE_PATTERN.test(boneName) && /\.(position|p)$/i.test(name)) {
+      return false;
+    }
+
+    return true;
+  });
+
+  const removed = before - clip.tracks.length;
+  if (removed > 0) {
+    console.log(`[Anim] "${clip.name}": ${removed} track(s) perigoso(s) removido(s)`);
+  }
+  return clip;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Character
+// ─────────────────────────────────────────────────────────────────────────────
 
 export class Character {
   constructor(scene) {
-    this.scene = scene;
-    this.model = null;
-    this.mixer = null;
-    this.animations = {};
-    this.currentAction = null;
-    this.state = CharacterState.IDLE;
-    this.face = null;
-    this.outline = null;
+    this.scene        = scene;
+    this.model        = null;
+    this.mixer        = null;
+    this.animations   = {};
+    this.currentAction= null;
+    this.state        = CharacterState.IDLE;
+    this.face         = null;
+    this.outline      = null;
 
-    this._placeholder = null;
+    this._placeholder    = null;
     this._placeholderMat = null;
     this._placeholderAngle = 0;
-    this._targetColor = STATE_COLORS[CharacterState.IDLE].clone();
+    this._targetColor  = STATE_COLORS[CharacterState.IDLE].clone();
     this._currentColor = STATE_COLORS[CharacterState.IDLE].clone();
 
-    this.voiceProfile = { rate: 0, pitch: 'medium' };
+    this.voiceProfile  = { rate: 0, pitch: 'medium' };
 
-    this._landingTimer = 0;
-    this._baseScale = 1.0;
+    this._landingTimer    = 0;
+    this._baseScale       = 1.0;
+    this._isDragLocked    = false;     // flag interna de drag
 
-    // Snapshot de transform capturado no início do drag
-    this._dragSnapshot = null;
-
-    // Partículas de reação
-    this._particles = null;
-    this._particleTimer = 0;
-    this._active = true;
+    this._particles    = null;
+    this._particleTimer= 0;
+    this._active       = true;
     this._reactionTimeout = null;
     this._initialPosition = new THREE.Vector3();
-    this._modelVersion = 0;
-
-    // Diagnóstico de escala (log a cada N frames, apenas em dev)
-    this._diagFrameCount = 0;
+    this._sequenceListener= null;
   }
 
+  // ───────────────────────────────────────────────────────────────────────────
+  // Inicialização
+  // ───────────────────────────────────────────────────────────────────────────
+
   _cleanup() {
+    this._isDragLocked = false;
+
     if (this.mixer) {
       this.mixer.stopAllAction();
+      this.mixer.uncacheRoot(this.model);
       this.mixer = null;
     }
-    if (this.face) {
-      try { this.face.dispose(); } catch {}
-      this.face = null;
-    }
-    if (this.outline) {
-      try { this.outline.dispose(); } catch {}
-      this.outline = null;
-    }
+    if (this.face)    { try { this.face.dispose(); }    catch {} this.face    = null; }
+    if (this.outline) { try { this.outline.dispose(); } catch {} this.outline = null; }
     if (this.model) {
+      unfreezeTransform(this.model);
       try { this.scene.remove(this.model); } catch {}
       this._disposeObject(this.model);
       this.model = null;
     }
-    this._landingTimer = 0;
-    this._baseScale = 1.0;
-    this._dragSnapshot = null;
-    this.currentAction = null;
-  }
 
-  // ── Inicialização ──────────────────────────────────────────────────────────
+    this._landingTimer  = 0;
+    this._baseScale     = 1.0;
+    this.currentAction  = null;
+    this._stopSequence();
+  }
 
   init(modelScene, clips) {
     this._cleanup();
-    this._modelVersion++;
 
     if (this._placeholder) {
       this.scene.remove(this._placeholder);
@@ -112,152 +143,117 @@ export class Character {
     }
 
     this.model = modelScene;
+    this.model.matrixAutoUpdate = true;
 
-    // Normaliza escala pelo bounding box
+    // ── Normalização de escala ──
+    // O FBXLoader já aplica fator 0.01 (cm→m). Calcula o bounding box depois
+    // de ADICIONAR à cena para ter a worldMatrix correta.
+    this.scene.add(this.model);
     const box = new THREE.Box3().setFromObject(this.model);
-    const center = box.getCenter(new THREE.Vector3());
     const size = box.getSize(new THREE.Vector3());
     const maxDim = Math.max(size.x, size.y, size.z) || 1;
+    const center = box.getCenter(new THREE.Vector3());
 
-    const scale = 1.8 / maxDim;
-    this.model.scale.setScalar(scale);
+    const targetHeight = 1.8;
+    const scale = targetHeight / maxDim;
     this._baseScale = scale;
 
-    const groundOffset = 0.02;
+    this.model.scale.setScalar(scale);
+
+    // Reposiciona para que o pé fique no chão
+    this.scene.remove(this.model);
+    const box2 = new THREE.Box3().setFromObject(this.model);
     this.model.position.set(
       -center.x * scale,
-      (-box.min.y * scale) + groundOffset,
+      -box2.min.y + 0.02,
       -center.z * scale
     );
+    this._initialPosition.copy(this.model.position);
+    this.scene.add(this.model);
 
-    this.model.traverse((child) => {
+    this.model.traverse(child => {
       if (child.isMesh) {
-        child.castShadow = true;
+        child.castShadow    = true;
         child.receiveShadow = true;
         child.frustumCulled = false;
       }
     });
 
-    this._initialPosition.copy(this.model.position);
-    this.scene.add(this.model);
+    console.log(`[Character] Model init — baseScale=${this._baseScale.toFixed(5)}, pos=${JSON.stringify(this.model.position)}`);
 
-    this.face = new FaceController(this.model);
+    this.face    = new FaceController(this.model);
     this.outline = new OutlineEffect(this.model);
 
-    // ── Filtro de animações ────────────────────────────────────────────────
-    this.mixer = new THREE.AnimationMixer(this.model);
+    // ── Registro de animações com filtro agressivo ──
+    this.mixer      = new THREE.AnimationMixer(this.model);
     this.animations = {};
 
-    clips.forEach(clip => {
-      const clipName = clip.name.toLowerCase();
+    for (const clip of clips) {
+      const filtered  = stripDangerousTracks(clip);
+      const clipName  = filtered.name.toLowerCase();
+      this.animations[clipName] = filtered;
 
-      // Remove TODOS os tracks de escala (de qualquer osso) e posição do root
-      // Usa toLowerCase() para comparação consistente
-      clip.tracks = clip.tracks.filter(track => {
-        const name = track.name.toLowerCase();
-
-        // Remove qualquer track de escala — eles causam crescimento durante animação
-        if (name.endsWith('.scale') ||
-            name.includes('.scale[') ||
-            name.match(/\.scale\.(x|y|z)$/)) {
-          return false;
-        }
-
-        // Remove posição do root bone para evitar drift vertical
-        const boneName = name.split('.')[0];
-        const isRootBone = boneName.includes('hips') ||
-                           boneName.includes('root') ||
-                           boneName.includes('pelvis') ||
-                           boneName === '' ||
-                           boneName.includes('armature');
-        if (isRootBone && name.includes('.position')) {
-          return false;
-        }
-
-        return true;
-      });
-
-      this.animations[clipName] = clip;
-
-      // Alias para o clip padrão do Mixamo
-      if ((clipName === 'mixamo.com' || clipName.includes('take 001')) && !this.animations['idle']) {
-        this.animations['idle'] = clip;
+      // Alias idle para clips do Mixamo
+      if (!this.animations['idle'] &&
+          (clipName === 'mixamo.com' || clipName.includes('take 001') || clipName.includes('armature'))) {
+        this.animations['idle'] = filtered;
       }
-    });
-
-    // Detectar perfil de voz
-    const modelName = this.model.name?.toLowerCase() ?? '';
-    if (modelName.includes('granny')) {
-      this.voiceProfile = { rate: -1, pitch: 'low' };
-    } else if (modelName.includes('michelle')) {
-      this.voiceProfile = { rate: 2, pitch: 'high' };
-    } else {
-      this.voiceProfile = { rate: 0, pitch: 'medium' };
     }
 
-    if (this._reactionTimeout) clearTimeout(this._reactionTimeout);
-    const availableAnims = Object.keys(this.animations);
-    console.log('[Character] Animações carregadas:', availableAnims.join(', '));
+    const available = Object.keys(this.animations);
+    console.log('[Character] Animações disponíveis:', available.join(', '));
 
-    if (this.animations['idle']) {
-      this.playAnimation('idle', true);
-    } else if (availableAnims.length > 0) {
-      console.log(`[Character] "idle" não encontrado, usando "${availableAnims[0]}"`);
-      this.playAnimation(availableAnims[0], true);
-    }
+    const startAnim = this.animations['idle'] ? 'idle' : available[0];
+    if (startAnim) this.playAnimation(startAnim, true);
   }
 
   initPlaceholder() {
     this._cleanup();
 
     const geo = new THREE.BoxGeometry(0.55, 0.75, 0.55, 4, 4, 4);
-
     this._placeholderMat = new THREE.MeshStandardMaterial({
-      color: STATE_COLORS[CharacterState.IDLE],
-      roughness: 0.35,
-      metalness: 0.25,
-      emissive: STATE_COLORS[CharacterState.IDLE],
-      emissiveIntensity: 0.1,
+      color:            STATE_COLORS[CharacterState.IDLE],
+      roughness:        0.35,
+      metalness:        0.25,
+      emissive:         STATE_COLORS[CharacterState.IDLE],
+      emissiveIntensity:0.1,
     });
 
     this._placeholder = new THREE.Mesh(geo, this._placeholderMat);
-    this._placeholder.castShadow = true;
+    this._placeholder.castShadow    = true;
     this._placeholder.receiveShadow = true;
     this._placeholder.position.set(0, 0.4, 0);
     this.scene.add(this._placeholder);
 
-    // Cabeça
-    const headGeo = new THREE.SphereGeometry(0.32, 12, 12);
-    const head = new THREE.Mesh(headGeo, this._placeholderMat);
+    const headGeo  = new THREE.SphereGeometry(0.32, 12, 12);
+    const head     = new THREE.Mesh(headGeo, this._placeholderMat);
     head.castShadow = true;
     head.position.set(0, 0.5, 0);
     this._placeholder.add(head);
 
-    // Olhos
-    const eyeGeo = new THREE.SphereGeometry(0.06, 8, 8);
-    const eyeMat = new THREE.MeshStandardMaterial({ color: 0x000000 });
+    const eyeGeo  = new THREE.SphereGeometry(0.06, 8, 8);
+    const eyeMat  = new THREE.MeshStandardMaterial({ color: 0x000000 });
     const leftEye = new THREE.Mesh(eyeGeo, eyeMat);
-    leftEye.name = 'LeftEye';
+    leftEye.name  = 'LeftEye';
     leftEye.position.set(-0.12, 0.05, 0.28);
     head.add(leftEye);
     const rightEye = new THREE.Mesh(eyeGeo, eyeMat);
-    rightEye.name = 'RightEye';
+    rightEye.name  = 'RightEye';
     rightEye.position.set(0.12, 0.05, 0.28);
     head.add(rightEye);
 
-    this.face = new FaceController(this._placeholder);
+    this.face    = new FaceController(this._placeholder);
     this.outline = new OutlineEffect(this._placeholder);
-
     this._addCheeks(head);
     this._addEars(head);
     this._initParticles();
   }
 
   _addCheeks(parent) {
-    const cheekGeo = new THREE.SphereGeometry(0.075, 8, 8);
-    const cheekMat = new THREE.MeshBasicMaterial({ color: 0xff9999, transparent: true, opacity: 0.5 });
+    const geo = new THREE.SphereGeometry(0.075, 8, 8);
+    const mat = new THREE.MeshBasicMaterial({ color: 0xff9999, transparent: true, opacity: 0.5 });
     [-0.2, 0.2].forEach(x => {
-      const cheek = new THREE.Mesh(cheekGeo, cheekMat);
+      const cheek = new THREE.Mesh(geo, mat);
       cheek.position.set(x, -0.02, 0.3);
       cheek.scale.set(1, 0.6, 0.4);
       parent.add(cheek);
@@ -265,9 +261,9 @@ export class Character {
   }
 
   _addEars(parent) {
-    const earGeo = new THREE.ConeGeometry(0.1, 0.18, 6);
+    const geo = new THREE.ConeGeometry(0.1, 0.18, 6);
     [-0.28, 0.28].forEach((x, i) => {
-      const ear = new THREE.Mesh(earGeo, this._placeholderMat);
+      const ear = new THREE.Mesh(geo, this._placeholderMat);
       ear.position.set(x, 0.38, 0);
       ear.rotation.z = i === 0 ? -0.3 : 0.3;
       parent.add(ear);
@@ -276,82 +272,66 @@ export class Character {
 
   _initParticles() {
     const count = 8;
-    const pGeo = new THREE.BufferGeometry();
-    const positions = new Float32Array(count * 3);
-    pGeo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-    const pMat = new THREE.PointsMaterial({
-      color: 0xffffff,
-      size: 0.06,
-      transparent: true,
-      opacity: 0,
-      sizeAttenuation: true,
-    });
-    this._particles = new THREE.Points(pGeo, pMat);
+    const geo   = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(count * 3), 3));
+    const mat = new THREE.PointsMaterial({ color: 0xffffff, size: 0.06, transparent: true, opacity: 0, sizeAttenuation: true });
+    this._particles = new THREE.Points(geo, mat);
     this._particles.position.set(0, 0.9, 0);
     this.scene.add(this._particles);
   }
 
-  // ── Estado visual ──────────────────────────────────────────────────────────
+  // ───────────────────────────────────────────────────────────────────────────
+  // Estado visual
+  // ───────────────────────────────────────────────────────────────────────────
 
   applyBehaviorState(behaviorState) {
     this.state = behaviorState;
     const target = STATE_COLORS[behaviorState] ?? STATE_COLORS[CharacterState.IDLE];
     this._targetColor.copy(target);
 
-    if (behaviorState === CharacterState.HAPPY) {
-      this._burstParticles();
-    }
+    if (behaviorState === CharacterState.HAPPY) this._burstParticles();
 
-    // DRAGGING: congela o mixer imediatamente, sem disparar nenhuma animação.
-    // Qualquer animação em andamento fica pausada e será retomada ao soltar.
-    if (behaviorState === CharacterState.DRAGGING) {
-      if (this.mixer) this.mixer.timeScale = 0;
-      if (this.currentAction) this.currentAction.paused = true;
-      return;
-    }
+    // DRAGGING: não dispara animação, mixer congelado via _isDragLocked
+    if (behaviorState === CharacterState.DRAGGING) return;
 
-    // Saindo do DRAGGING: retoma mixer
+    // Retomada após drag pelo BehaviorSystem
     if (this.mixer) {
       this.mixer.timeScale = 1;
       if (this.currentAction) this.currentAction.paused = false;
     }
 
-    // Mapeia estado → animação
-    if (this.mixer) {
-      const animMap = {
-        [CharacterState.IDLE]:     'idle',
-        [CharacterState.HAPPY]:    'happy',
-        [CharacterState.BORED]:    'bored',
-        [CharacterState.SLEEPING]: 'sleeping',
-        [CharacterState.REACTING]: 'reaction',
-      };
+    if (!this.mixer) return;
 
-      let animName = animMap[behaviorState];
-      if (animName && !this.animations[animName.toLowerCase()]) {
-        animName = this.animations['idle'] ? 'idle' : Object.keys(this.animations)[0];
-      }
-      if (animName && this.animations[animName?.toLowerCase()]) {
-        const loop = behaviorState === CharacterState.IDLE ||
-                     behaviorState === CharacterState.SLEEPING;
-        this.playAnimation(animName, loop);
-      }
+    const animMap = {
+      [CharacterState.IDLE]:     'idle',
+      [CharacterState.HAPPY]:    'happy',
+      [CharacterState.BORED]:    'bored',
+      [CharacterState.SLEEPING]: 'sleeping',
+      [CharacterState.REACTING]: 'reaction',
+    };
+
+    let animName = animMap[behaviorState];
+    if (animName && !this.animations[animName]) {
+      animName = this.animations['idle'] ? 'idle' : Object.keys(this.animations)[0];
+    }
+    if (animName && this.animations[animName]) {
+      const loop = behaviorState === CharacterState.IDLE || behaviorState === CharacterState.SLEEPING;
+      this.playAnimation(animName, loop);
     }
   }
 
-  /** Efeito de pouso (Squash & Stretch) */
   land() {
     this._landingTimer = 0.4;
     this._burstParticles();
-    console.log('[Character] Pouso detectado 🛬');
   }
 
   _burstParticles() {
     if (!this._particles) return;
     this._particleTimer = 1.5;
-    const positions = this._particles.geometry.attributes.position;
-    const count = positions.count;
-    for (let i = 0; i < count; i++) positions.setXYZ(i, 0, 0, 0);
-    positions.needsUpdate = true;
+    const pos   = this._particles.geometry.attributes.position;
+    const count = pos.count;
+    for (let i = 0; i < count; i++) pos.setXYZ(i, 0, 0, 0);
+    pos.needsUpdate = true;
     this._particles.material.opacity = 1;
     this._particles._velocities = Array.from({ length: count }, () => ({
       x: (Math.random() - 0.5) * 1.5,
@@ -360,12 +340,15 @@ export class Character {
     }));
   }
 
-  // ── Animações ──────────────────────────────────────────────────────────────
+  // ───────────────────────────────────────────────────────────────────────────
+  // Animações
+  // ───────────────────────────────────────────────────────────────────────────
 
   playAnimation(name, loop = false) {
-    if (!this.mixer) return;
+    if (!this.mixer || this._isDragLocked) return null;
+
     const clip = this.animations[name.toLowerCase()];
-    if (!clip) return;
+    if (!clip) return null;
 
     this._stopSequence();
 
@@ -374,30 +357,27 @@ export class Character {
     action.clampWhenFinished = !loop;
 
     if (this.currentAction && this.currentAction !== action) {
-      this.currentAction.fadeOut(0.3);
-      action.reset().fadeIn(0.3).play();
+      this.currentAction.fadeOut(0.25);
+      action.reset().fadeIn(0.25).play();
     } else {
       action.reset().play();
     }
+
     this.currentAction = action;
     return action;
   }
 
-  playSequence(names, loop = false) {
-    if (!names.length) return;
+  playSequence(names, _ignored) {
+    if (!Array.isArray(names) || !names.length) return;
     const [first, ...rest] = names;
     const action = this.playAnimation(first, false);
     if (!action) return;
 
     const onFinished = (e) => {
-      if (e.action === action) {
-        this.mixer.removeEventListener('finished', onFinished);
-        if (rest.length) {
-          this.playSequence(rest, loop);
-        } else if (loop) {
-          this.playSequence(names, loop);
-        }
-      }
+      if (e.action !== action) return;
+      this.mixer.removeEventListener('finished', onFinished);
+      if (rest.length) this.playSequence(rest);
+      else this.playAnimation('idle', true);
     };
     this._sequenceListener = onFinished;
     this.mixer.addEventListener('finished', onFinished);
@@ -410,31 +390,55 @@ export class Character {
     }
   }
 
-  // ── Drag ───────────────────────────────────────────────────────────────────
+  // ───────────────────────────────────────────────────────────────────────────
+  // Drag lock — interface para InputManager
+  // ───────────────────────────────────────────────────────────────────────────
 
-  /** Chamado pelo InputManager quando o drag COMEÇA. */
   startDragLock() {
-    if (!this.model) return;
-    this._dragSnapshot = captureTransform(this.model);
-    if (this.outline) this.outline.hide();
-    console.log(`[Character] Drag lock — escala base: ${this._baseScale.toFixed(4)}`);
-  }
+    if (!this.model || this._isDragLocked) return;
+    this._isDragLocked = true;
 
-  /** Chamado pelo InputManager quando o drag TERMINA. */
-  endDragLock() {
-    if (!this.model) return;
-    if (this._dragSnapshot) {
-      // Restaura exatamente a posição e escala capturadas antes do drag
-      restoreTransform(this.model, this._dragSnapshot);
+    // Para TODAS as actions do mixer: nenhuma track roda durante o drag
+    if (this.mixer) {
+      this.mixer.timeScale = 0;
+      // Força o mixer a não avançar aplicando stopAllAction
+      // (pausa completa, sem acumular transforms)
+      this.mixer.stopAllAction();
     }
-    this._dragSnapshot = null;
-    console.log('[Character] Drag lock liberado');
+
+    // Congela a matrix do modelo (impede qualquer modificação externa de transform)
+    freezeTransform(this.model, this._baseScale);
+
+    if (this.outline) this.outline.hide();
+    console.log(`[Character] DRAG START — scale=${this._baseScale.toFixed(5)}`);
   }
 
-  // ── Hover ──────────────────────────────────────────────────────────────────
+  endDragLock() {
+    if (!this.model || !this._isDragLocked) return;
+    this._isDragLocked = false;
+
+    // Descongela a matrix
+    unfreezeTransform(this.model);
+
+    // Garante que a escala está no valor base pós-drag
+    this.model.scale.setScalar(this._baseScale);
+
+    // Retoma a animação de idle
+    if (this.mixer) {
+      this.mixer.timeScale = 1;
+      const startAnim = this.animations['idle'] ? 'idle' : Object.keys(this.animations)[0];
+      if (startAnim) this.playAnimation(startAnim, true);
+    }
+
+    console.log(`[Character] DRAG END — scale=${this.model.scale.x.toFixed(5)}`);
+  }
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // Hover
+  // ───────────────────────────────────────────────────────────────────────────
 
   onHoverEnter() {
-    if (this.state === CharacterState.DRAGGING) return; // ignora hover durante drag
+    if (this._isDragLocked) return;
     if (this.outline) this.outline.show();
   }
 
@@ -442,10 +446,14 @@ export class Character {
     if (this.outline) this.outline.hide();
   }
 
+  // ───────────────────────────────────────────────────────────────────────────
+  // Interação
+  // ───────────────────────────────────────────────────────────────────────────
+
   react() {
     if (this._placeholder) {
       this._reactionBounce();
-    } else if (this.model) {
+    } else if (this.model && !this._isDragLocked) {
       this.playAnimation('reaction', false);
       clearTimeout(this._reactionTimeout);
       this._reactionTimeout = setTimeout(() => {
@@ -457,13 +465,11 @@ export class Character {
   _reactionBounce() {
     if (!this._placeholder) return;
     const startY = this._placeholder.position.y;
-    let elapsed = 0;
-    const dur = 0.5;
+    let elapsed  = 0;
     const bounce = (dt) => {
       elapsed += dt;
-      const t = Math.min(elapsed / dur, 1);
-      const off = Math.sin(t * Math.PI) * 0.25;
-      this._placeholder.position.y = startY + off;
+      const t   = Math.min(elapsed / 0.5, 1);
+      this._placeholder.position.y = startY + Math.sin(t * Math.PI) * 0.25;
       this._placeholder.scale.setScalar(1 + Math.sin(t * Math.PI) * 0.12);
       if (t < 1) requestAnimationFrame(() => bounce(0.016));
       else this._placeholder.scale.setScalar(1);
@@ -471,47 +477,40 @@ export class Character {
     bounce(0);
   }
 
-  // ── Colisão / Raycasting ───────────────────────────────────────────────────
+  // ───────────────────────────────────────────────────────────────────────────
+  // Colisão
+  // ───────────────────────────────────────────────────────────────────────────
 
   getCollidableObjects() {
     const result = [];
     if (this._placeholder) result.push(this._placeholder);
     if (this.model) {
       this.model.traverse(child => {
-        if (child.isMesh && !child.userData.isOutline && child.name !== 'OutlineMarker') {
+        if (child.isMesh && !child.userData.isOutline && child.name !== 'OutlineMarker')
           result.push(child);
-        }
       });
     }
     return result;
   }
 
-  // ── Loop de update ─────────────────────────────────────────────────────────
+  // ───────────────────────────────────────────────────────────────────────────
+  // Update loop
+  // ───────────────────────────────────────────────────────────────────────────
 
   update(delta) {
     if (!this._active) return;
 
-    // ── Diagnóstico de escala (dev) ─────────────────────────────────────────
-    this._diagFrameCount++;
-    if (this._diagFrameCount % 120 === 0 && this.model) {
-      const s = this.model.scale.x;
-      if (Math.abs(s - this._baseScale) > 0.001) {
-        console.warn(`[Character] ESCALA DESVIOU: ${s.toFixed(5)} (base=${this._baseScale.toFixed(5)})`);
-      }
-    }
-
-    // ── Caminho do Placeholder ─────────────────────────────────────────────
+    // ── Caminho do Placeholder ──────────────────────────────────────────────
     if (this._placeholder) {
-      if (this.face) this.face.update(delta);
+      if (this.face)    this.face.update(delta);
       if (this.outline) this.outline.update(delta);
-
       this._updatePlaceholderAnimation(delta);
       this._updatePlaceholderColor(delta);
 
       if (this._landingTimer > 0) {
         this._landingTimer -= delta;
-        const progress = 1 - (this._landingTimer / 0.4);
-        const bounce = Math.sin(progress * Math.PI) * 0.25 * (1 - progress);
+        const p      = 1 - (this._landingTimer / 0.4);
+        const bounce = Math.sin(p * Math.PI) * 0.25 * (1 - p);
         this._placeholder.scale.y = 1 - bounce;
         this._placeholder.scale.x = 1 + bounce * 0.5;
         this._placeholder.scale.z = 1 + bounce * 0.5;
@@ -523,112 +522,97 @@ export class Character {
       return;
     }
 
-    // ── Caminho do Modelo GLB/FBX ──────────────────────────────────────────
+    // ── Caminho do Modelo GLB/FBX ───────────────────────────────────────────
     if (!this.model) return;
 
-    // ── DRAGGING: restore snapshot toda frame ──────────────────────────────
-    // Mixer NÃO é atualizado durante drag para eliminar qualquer track de escala.
-    // A transform é restaurada a partir do snapshot capturado em startDragLock().
-    if (this.state === CharacterState.DRAGGING) {
-      if (this._dragSnapshot) {
-        restoreTransform(this.model, this._dragSnapshot);
-      } else {
-        // Fallback: força escala base caso startDragLock() não tenha sido chamado
-        this.model.scale.setScalar(this._baseScale);
+    // DRAG LOCK ATIVO: modelo está com matrixAutoUpdate=false.
+    // Não faz NADA — nem mixer, nem float, nem escala.
+    if (this._isDragLocked) {
+      // Garante redundantemente que a escala não foi violada
+      if (this.model.matrixAutoUpdate) {
+        // Alguém descongelou a matrix inesperadamente — re-congela
+        freezeTransform(this.model, this._baseScale);
       }
-      return; // mixer.update() NÃO roda aqui
+      return;
     }
 
-    // ── Estado normal ──────────────────────────────────────────────────────
+    // ── Estado normal ───────────────────────────────────────────────────────
     if (this.mixer) this.mixer.update(delta);
-    if (this.face) this.face.update(delta);
+    if (this.face)    this.face.update(delta);
     if (this.outline) this.outline.update(delta);
 
-    const floatOffset = Math.sin(Date.now() * 0.003) * 0.05;
-    this.model.position.y = this._initialPosition.y + floatOffset;
-    this.model.position.x = this._initialPosition.x;
-    this.model.position.z = this._initialPosition.z;
+    // Float suave
+    const floatY = Math.sin(Date.now() * 0.003) * 0.05;
+    this.model.position.set(
+      this._initialPosition.x,
+      this._initialPosition.y + floatY,
+      this._initialPosition.z
+    );
 
-    // Garante que a escala nunca deriva mesmo fora do drag
-    if (Math.abs(this.model.scale.x - this._baseScale) > 0.002) {
+    // Guarda-chuva: se alguma track sobreviveu ao filtro e alterou a escala, corrige
+    if (Math.abs(this.model.scale.x - this._baseScale) > 0.0001) {
+      console.warn(`[Character] Escala corrigida: ${this.model.scale.x.toFixed(6)} → ${this._baseScale.toFixed(6)}`);
       this.model.scale.setScalar(this._baseScale);
     }
 
     if (this._particles) this._updateParticles(delta);
   }
 
-  // ── Métodos auxiliares ─────────────────────────────────────────────────────
+  // ───────────────────────────────────────────────────────────────────────────
+  // Auxiliares
+  // ───────────────────────────────────────────────────────────────────────────
 
   _updateParticles(delta) {
     if (!this._particles) return;
-    if (this._particleTimer <= 0) {
-      this._particles.material.opacity = 0;
-      return;
-    }
+    if (this._particleTimer <= 0) { this._particles.material.opacity = 0; return; }
     this._particleTimer -= delta;
-    const positions = this._particles.geometry.attributes.position;
-    const count = positions.count;
+    const pos = this._particles.geometry.attributes.position;
     const velocities = this._particles._velocities;
     if (!velocities) return;
-    for (let i = 0; i < count; i++) {
+    for (let i = 0; i < pos.count; i++) {
       const v = velocities[i];
-      positions.setXYZ(i,
-        positions.getX(i) + v.x * delta,
-        positions.getY(i) + v.y * delta,
-        positions.getZ(i) + v.z * delta
-      );
+      pos.setXYZ(i, pos.getX(i) + v.x * delta, pos.getY(i) + v.y * delta, pos.getZ(i) + v.z * delta);
       v.y -= 2.0 * delta;
     }
-    positions.needsUpdate = true;
+    pos.needsUpdate = true;
     this._particles.material.opacity = Math.max(0, this._particleTimer / 1.5);
   }
 
   _disposeObject(obj) {
     if (!obj) return;
     obj.traverse(node => {
-      if (node.isMesh) {
-        node.geometry?.dispose();
-        if (Array.isArray(node.material)) {
-          node.material.forEach(m => this._disposeMaterial(m));
-        } else {
-          this._disposeMaterial(node.material);
-        }
-      }
+      if (!node.isMesh) return;
+      node.geometry?.dispose();
+      const mats = Array.isArray(node.material) ? node.material : [node.material];
+      mats.forEach(m => this._disposeMaterial(m));
     });
   }
 
   _disposeMaterial(mat) {
     if (!mat) return;
-    Object.keys(mat).forEach(key => {
-      if (mat[key]?.isTexture) mat[key].dispose();
-    });
+    Object.values(mat).forEach(v => { if (v?.isTexture) v.dispose(); });
     mat.dispose();
   }
 
   _updatePlaceholderAnimation(delta) {
     this._placeholderAngle += delta;
+    const a = this._placeholderAngle;
     switch (this.state) {
-      case CharacterState.SLEEPING: {
-        const breathe = Math.sin(this._placeholderAngle * 0.8) * 0.03;
-        this._placeholder.position.y = 0.4 + breathe;
-        this._placeholder.rotation.z = Math.sin(this._placeholderAngle * 0.4) * 0.08;
+      case CharacterState.SLEEPING:
+        this._placeholder.position.y  = 0.4 + Math.sin(a * 0.8) * 0.03;
+        this._placeholder.rotation.z  = Math.sin(a * 0.4) * 0.08;
         break;
-      }
-      case CharacterState.BORED: {
-        this._placeholder.position.y = 0.4 + Math.sin(this._placeholderAngle * 0.8) * 0.03;
-        this._placeholder.rotation.z = Math.sin(this._placeholderAngle * 0.5) * 0.12;
+      case CharacterState.BORED:
+        this._placeholder.position.y  = 0.4 + Math.sin(a * 0.8) * 0.03;
+        this._placeholder.rotation.z  = Math.sin(a * 0.5) * 0.12;
         break;
-      }
-      case CharacterState.HAPPY: {
-        const jump = Math.abs(Math.sin(this._placeholderAngle * 4)) * 0.15;
-        this._placeholder.position.y = 0.4 + jump;
-        this._placeholder.rotation.y = Math.sin(this._placeholderAngle * 3) * 0.3;
+      case CharacterState.HAPPY:
+        this._placeholder.position.y  = 0.4 + Math.abs(Math.sin(a * 4)) * 0.15;
+        this._placeholder.rotation.y  = Math.sin(a * 3) * 0.3;
         break;
-      }
-      default: {
-        this._placeholder.position.y = 0.4 + Math.sin(this._placeholderAngle * 1.5) * 0.045;
-        this._placeholder.rotation.y = Math.sin(this._placeholderAngle * 0.5) * 0.12;
-      }
+      default:
+        this._placeholder.position.y  = 0.4 + Math.sin(a * 1.5) * 0.045;
+        this._placeholder.rotation.y  = Math.sin(a * 0.5) * 0.12;
     }
   }
 
@@ -637,15 +621,13 @@ export class Character {
     this._currentColor.lerp(this._targetColor, 0.05);
     this._placeholderMat.color.copy(this._currentColor);
     this._placeholderMat.emissive.copy(this._currentColor);
-    this._placeholderMat.emissiveIntensity = 0.1 +
-      Math.abs(Math.sin(Date.now() * 0.002)) * 0.05;
+    this._placeholderMat.emissiveIntensity = 0.1 + Math.abs(Math.sin(Date.now() * 0.002)) * 0.05;
   }
 
   dispose() {
     this._active = false;
     clearTimeout(this._reactionTimeout);
     this._cleanup();
-
     if (this._particles) {
       this.scene.remove(this._particles);
       this._particles.geometry?.dispose();
