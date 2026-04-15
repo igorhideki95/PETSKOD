@@ -98,6 +98,10 @@ export class Character {
   _cleanup() {
     this._isDragLocked = false;
 
+    // Para o listener de seqência ANTES de anular o mixer
+    // (senão _stopSequence() tenta this.mixer.removeEventListener em null e falha)
+    this._stopSequence();
+
     if (this.mixer) {
       this.mixer.stopAllAction();
       if (this.model) this.mixer.uncacheRoot(this.model);
@@ -115,7 +119,6 @@ export class Character {
     this._landingTimer  = 0;
     this._baseScale     = 1.0;
     this.currentAction  = null;
-    this._stopSequence();
   }
 
   init(modelScene, clips) {
@@ -273,8 +276,9 @@ export class Character {
     // DRAGGING: não dispara animação, mixer congelado via _isDragLocked
     if (behaviorState === CharacterState.DRAGGING) return;
 
-    // Retomada após drag pelo BehaviorSystem
-    if (this.mixer) {
+    // Retomada após drag pelo BehaviorSystem — só se não estiver em drag lock
+    // (forceState() vindo do tray durante drag não deve reiniciar o mixer)
+    if (this.mixer && !this._isDragLocked) {
       this.mixer.timeScale = 1;
       if (this.currentAction) this.currentAction.paused = false;
     }

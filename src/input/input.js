@@ -78,6 +78,7 @@ export class InputManager {
     }
 
     this._isDragging = false;
+    this._didDragThisClick = false;  // reinicia flag de drag-click
     this._dragStartX = e.screenX;
     this._dragStartY = e.screenY;
     this._lastMouseX = e.screenX;
@@ -164,7 +165,12 @@ export class InputManager {
   }
 
   _onClick(e) {
-    if (this._isDragging) return;
+    // Ignora o click gerado ao soltar o mouse após um drag
+    // (_isDragging já é false aqui pois _onMouseUp/endDrag rodou antes)
+    if (this._didDragThisClick) {
+      this._didDragThisClick = false;
+      return;
+    }
 
     const rect = this._canvas.getBoundingClientRect();
     this._mouse.x =  ((e.clientX - rect.left) / rect.width)  * 2 - 1;
@@ -184,6 +190,7 @@ export class InputManager {
 
   _startDrag() {
     this._isDragging = true;
+    this._didDragThisClick = true;   // marca que este ciclo de mouse foi drag
     // 1. Congela o modelo (para o mixer + matrix)
     this.character.startDragLock?.();
     // 2. Notifica o behavior system (muda estado para DRAGGING)
@@ -205,17 +212,9 @@ export class InputManager {
 
   update(delta) {
     if (this.trail) this.trail.update(delta);
-    if (this._isDragging) return; // nada sobre o personagem durante drag
-
-    if (this.scene && this.character) {
-      this._raycaster.setFromCamera(this._mouse, this.camera);
-      const hits = this._raycaster.intersectObjects(this.character.getCollidableObjects(), true);
-      if (hits.length > 0) {
-        this.character.onHoverEnter?.();
-      } else {
-        this.character.onHoverExit?.();
-      }
-    }
+    // Hover / outline já é gerenciado pelo _onMouseMove via passthrough detection.
+    // Não fazemos raycasting aqui para evitar custo de CPU a 30fps
+    // (outline.show/hide têm guards internos de isActive).
   }
 
   // ─────────────────────────────────────────────────────────────────────────

@@ -69,12 +69,15 @@ export class OutlineEffect {
 
   dispose() {
     this.outlines.forEach(outline => {
-      if (outline.geometry) outline.geometry.dispose();
+      // NUNCA faça dispose da geometria aqui:
+      // os outline meshes compartilham a MESMA instância de geometria do mesh original.
+      // Chamar geometry.dispose() aqui destruiria o personagem atual.
       outline.parent?.remove(outline);
     });
     this.outlines = [];
     if (this.outlineMaterial) {
       this.outlineMaterial.dispose();
+      this.outlineMaterial = null;
     }
   }
 }

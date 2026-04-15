@@ -351,6 +351,12 @@ async function init() {
   if (window.petskodAPI) {
     window.petskodAPI.onForceState(s => behavior.forceState(s));
     window.petskodAPI.onContextMenuAction(a => ui.onAction(a));
+    // "Testar fala" no menu do tray — estava exposto no preload mas sem handler aqui
+    window.petskodAPI.onSpeechTest(() => {
+      const profile = behavior.getVoiceProfile(character.voiceProfile);
+      tts.speak('Olá! Estou funcionando perfeitamente!', profile);
+      ui.showSpeech('Olá! Estou funcionando perfeitamente!');
+    });
   }
 
   window.addEventListener('beforeunload', () => {

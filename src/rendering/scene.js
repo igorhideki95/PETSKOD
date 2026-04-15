@@ -98,13 +98,16 @@ export class SceneManager {
     const loop = (timestamp) => {
       this._animationId = requestAnimationFrame(loop);
 
-      const delta = timestamp - this._lastFrameTime;
-      if (delta < FRAME_TIME) return; // limita a 30 FPS
+      const rawDelta = timestamp - this._lastFrameTime;
+      if (rawDelta < FRAME_TIME) return; // limita a 30 FPS
 
+      // Clampeia o delta: se a janela ficou em background e voltou,
+      // rawDelta pode ser de segundos — causaria saltos nas animações.
+      const cappedDelta = Math.min(rawDelta, 100); // máximo 100ms por frame
       this._lastFrameTime = timestamp;
 
       for (const cb of this._onRenderCallbacks) {
-        cb(delta / 1000); // passa delta em segundos
+        cb(cappedDelta / 1000); // passa delta em segundos
       }
 
       this.renderer.render(this.scene, this.camera);
